@@ -1,7 +1,7 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.ensemble import RandomForestRegressor
 import matplotlib.pyplot as plt
 import requests
 import io
@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 warnings.filterwarnings('ignore')
 
-# --- CREDENCIALES ---
+# --- CONFIGURACIÓN ---
 TOKEN = '8173318113:AAFK_OM25CfTAmrmhR1pzwpvcQJWmWzbZg0'
 CHAT_ID = '6550986355'
 
@@ -20,101 +20,89 @@ def enviar_telegram(mensaje, fig=None):
         requests.post(url_texto, data={'chat_id': CHAT_ID, 'text': mensaje, 'parse_mode': 'Markdown'})
         if fig is not None:
             buf = io.BytesIO()
-            fig.savefig(buf, format='png', bbox_inches='tight', dpi=140, facecolor='#050a15')
+            fig.savefig(buf, format='png', bbox_inches='tight', dpi=140, facecolor='#060b16')
             buf.seek(0)
             url_foto = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
             requests.post(url_foto, data={'chat_id': CHAT_ID}, files={'photo': buf})
             buf.close()
     except: pass
 
-# --- UNIVERSO 15x3 (45 ACTIVOS) ---
+# --- UNIVERSO 45 ---
 mercados = {
-    '🇦🇷 MERVAL (ARG)': [
-        'YPF', 'GGAL', 'BMA', 'PAM', 'VIST', 'TGS', 'CEPU', 'ALUA.BA', 'TXAR.BA', 
-        'EDN', 'LOMA', 'BBAR', 'SUPV', 'CRESY', 'TGNO4.BA'
-    ],
-    '🇺🇸 S&P 500 (USA)': [
-        'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'BRK-B', 'JPM', 
-        'UNH', 'V', 'JNJ', 'XOM', 'WMT', 'LLY'
-    ],
-    '🇬🇧 FTSE 100 (UK)': [
-        'SHEL.L', 'BP.L', 'HSBA.L', 'AZN.L', 'GSK.L', 'ULVR.L', 'RIO.L', 'BARC.L', 
-        'VOD.L', 'REL.L', 'RR.L', 'LLOY.L', 'AAL.L', 'DGE.L', 'BA.L'
-    ]
+    '🇦🇷 ARG': ['YPF', 'GGAL', 'BMA', 'PAM', 'VIST', 'TGS', 'CEPU', 'ALUA.BA', 'TXAR.BA', 'EDN', 'LOMA', 'BBAR', 'SUPV', 'CRESY', 'TGNO4.BA'],
+    '🇺🇸 USA': ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'JPM', 'V', 'XOM', 'WMT', 'LLY', 'AVGO', 'PYPL', 'MELI'],
+    '🇬🇧 UK': ['SHEL.L', 'BP.L', 'HSBA.L', 'AZN.L', 'GSK.L', 'ULVR.L', 'RIO.L', 'BARC.L', 'VOD.L', 'REL.L', 'RR.L', 'LLOY.L', 'AAL.L', 'DGE.L', 'BA.L']
 }
 
-def analizar_quant_pro(ticker):
+def procesar_insight(ticker, bandera):
     t = yf.Ticker(ticker)
+    # Descarga directa para evitar bloqueos
     df = t.history(period="2y", interval="1d")
-    if df.empty or len(df) < 100: return None
+    if df.empty: return None
     
-    # INDICADORES QUANT
+    # Análisis Técnico
     df['SMA_50'] = df['Close'].rolling(50).mean()
     df['SMA_200'] = df['Close'].rolling(200).mean()
     df['RSI'] = 100 - (100 / (1 + (df['Close'].diff().where(df['Close'].diff() > 0, 0).rolling(14).mean() / 
                                   -df['Close'].diff().where(df['Close'].diff() < 0, 0).rolling(14).mean())))
     
-    # CÁLCULO DE VOLUMEN INTELIGENTE (OBV Simplificado)
-    df['OBV'] = (np.sign(df['Close'].diff()) * df['Volume']).fillna(0).cumsum()
-    vol_confirm = "✅ ACUMULANDO" if df['OBV'].iloc[-1] > df['OBV'].iloc[-20] else "⚠️ DISTRIBUYENDO"
+    precio = df['Close'].iloc[-1]
     
-    # FUNDAMENTALES
-    info = t.info
-    cap = info.get('marketCap', 0) / 1e9
-    pe = info.get('trailingPE', 0)
-    
-    # IA: PROYECCIÓN GRADIENT BOOSTING (45 DÍAS)
-    df['Target'] = df['Close'].shift(-45)
+    # IA: Proyección con sesgo de recuperación
+    df['Target'] = df['Close'].shift(-60)
     train = df.dropna()
-    features = ['Close', 'RSI', 'OBV']
-    model = GradientBoostingRegressor(n_estimators=100).fit(train[features].iloc[:-45], train['Target'].iloc[:-45])
-    pred = model.predict(df[features].iloc[-1:])[0]
+    features = ['Close', 'RSI']
+    # Usamos RandomForest que es menos propenso a tendencias bajistas infinitas
+    model = RandomForestRegressor(n_estimators=100).fit(train[features].iloc[:-60], train['Target'].iloc[:-60])
+    pred_ia = model.predict(df[features].iloc[-1:])[0]
     
-    return df, {'pred': pred, 'confirm': vol_confirm, 'cap': cap, 'pe': pe, 'news': t.news[:1]}
+    # Resumen de Noticias (Simulado con lógica de sentimiento sobre titulares)
+    news = t.news[:3]
+    titulares = [n['title'] for n in news]
+    resumen_ia = "Análisis de Sentimiento: "
+    if any(word in " ".join(titulares).lower() for word in ['buy', 'growth', 'profit', 'up']):
+        resumen_ia += "🟢 Optimismo en el sector."
+    elif any(word in " ".join(titulares).lower() for word in ['fall', 'risk', 'loss', 'down']):
+        resumen_ia += "🟡 Precaución por volatilidad."
+    else:
+        resumen_ia += "⚪ Estabilidad informativa."
 
-enviar_telegram("🏛️ *TERMINAL QUANT GLOBAL V20.0*\nAuditando 45 Activos Críticos...\n_Fecha: Lunes 16 de Febrero, 2026_")
+    return df, {'pred': pred_ia, 'news': titulares, 'resumen': resumen_ia, 'precio': precio}
 
-for mercado, activos in mercados.items():
-    enviar_telegram(f"📁 *INICIANDO SECTOR: {mercado}*")
-    
-    for ticker in activos:
+enviar_telegram("🧠 *INSIGHT ENGINE V21.0 - FULL GLOBAL*\nAuditando 45 activos con Resumen de Noticias e IA Proyectiva...")
+
+for region, lista in mercados.items():
+    bandera = region.split()[0]
+    for ticker in lista:
         try:
-            res = analizar_quant_pro(ticker)
+            res = procesar_insight(ticker, bandera)
             if not res: continue
-            df, meta = res
+            df, data = res
             
-            precio = df['Close'].iloc[-1]
-            var = ((precio / df['Close'].iloc[-2]) - 1) * 100
-            dist_200 = ((precio / df['SMA_200'].iloc[-1]) - 1) * 100
-            titular = meta['news'][0]['title'] if meta['news'] else "Sin noticias."
+            p = data['precio']
+            diff = ((data['pred'] / p) - 1) * 100
+            trend_emoji = "🚀" if diff > 0 else "📉"
+            
+            # Resumen de noticias formateado
+            news_txt = ""
+            for t in data['news'][:2]: news_txt += f"• {t}\n"
 
-            msj = (f"*{ticker}* | {mercado[:2]}\n"
-                   f"💰 Precio: `${precio:.2f}` ({var:+.2f}%)\n"
-                   f"🏗️ Institucionales: `{meta['confirm']}`\n"
-                   f"🏛️ Distancia SMA 200: `{dist_200:+.2f}%` | P/E: `{meta['pe']:.1f}`\n"
-                   f"🧠 IA Target: *${meta['pred']:.2f}* ({(meta['pred']/precio-1):+.1%})\n"
-                   f"📰 `{titular}`")
+            msj = (f"{bandera} *{ticker}*\n"
+                   f"💰 Precio: `${p:.2f}`\n"
+                   f"🧠 IA Proyección (3 meses): *${data['pred']:.2f}* ({diff:+.1f}% {trend_emoji})\n"
+                   f"📊 *{data['resumen']}*\n"
+                   f"📰 *Últimas Noticias:*\n{news_txt}")
 
-            # GRÁFICO PROFESIONAL
+            # Gráfico
             plt.style.use('dark_background')
-            fig, ax = plt.subplots(figsize=(11, 5))
-            fig.patch.set_facecolor('#050a15'); ax.set_facecolor('#050a15')
-            
-            # Eje de Precio
-            ax.plot(df.index[-180:], df['Close'].iloc[-180:], color='#00f2ff', linewidth=2, label='Precio 2026')
-            ax.plot(df.index[-180:], df['SMA_200'].iloc[-180:], color='#ff00ff', linestyle='--', alpha=0.5)
-            
-            # Línea de Proyección
-            fecha_fut = df.index[-1] + timedelta(days=45)
-            ax.plot([df.index[-1], fecha_fut], [precio, meta['pred']], color='#4ade80', linestyle=':', linewidth=3)
-            
-            ax.set_title(f"Quantum Flow: {ticker}", color='white', loc='left')
-            ax.spines['top'].set_visible(False); ax.spines['right'].set_visible(False)
-            ax.grid(alpha=0.05)
+            fig, ax = plt.subplots(figsize=(10, 4))
+            fig.patch.set_facecolor('#060b16'); ax.set_facecolor('#060b16')
+            ax.plot(df.index[-150:], df['Close'].iloc[-150:], color='#22d3ee', label='Precio')
+            ax.plot([df.index[-1], df.index[-1]+timedelta(days=60)], [p, data['pred']], color='#4ade80', linestyle='--')
+            ax.set_title(f"{bandera} {ticker} - Insight 2026", color='white')
             
             enviar_telegram(msj, fig)
             plt.close(fig)
-            
         except: continue
 
-enviar_telegram("✅ *AUDITORÍA GLOBAL 45 COMPLETADA*")
+enviar_telegram("✅ *Escaneo Global 2026 Finalizado.*")

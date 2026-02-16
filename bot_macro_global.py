@@ -68,7 +68,7 @@ def procesar_terminal_full(ticker, nombre):
     train = df.dropna()
     features = ['Close', 'SMA_20', 'SMA_200', 'RSI', 'Momentum']
     
-    model = GradientBoostingRegressor(n_estimators=1000, learning_rate=0.03, max_depth=6, random_state=42)
+    model = GradientBoostingRegressor(n_estimators=320, learning_rate=0.03, max_depth=6, random_state=42)
     model.fit(train[features].iloc[:-45], train['Target'].iloc[:-45])
     
     pred_45d = model.predict(df[features].iloc[-1:])[0]

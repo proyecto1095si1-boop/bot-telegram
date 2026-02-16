@@ -26,3 +26,5 @@ jobs:
 
       - name: Ejecutar Bot Macro (Largo Plazo)
         run: python bot_estructural_1mes.py
+      - name: Ejecutar Radar Commodities
+        run: python bot_commodities.py

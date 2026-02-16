@@ -28,4 +28,4 @@ jobs:
         run: python bot_estructural_1mes.py
         
       - name: Ejecutar Radar Commodities
-        run: python bot_commodities.py
+        run: python bot_macro_global.py

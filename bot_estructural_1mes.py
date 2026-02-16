@@ -6,11 +6,10 @@ import matplotlib.pyplot as plt
 import requests
 import io
 import warnings
-import sys
 
 warnings.filterwarnings('ignore')
 
-# --- CONFIGURACIÓN DE ACCESO ---
+# --- CONFIGURACIÓN ---
 TOKEN = '8173318113:AAFK_OM25CfTAmrmhR1pzwpvcQJWmWzbZg0'
 CHAT_ID = '6550986355'
 
@@ -27,88 +26,91 @@ def enviar_telegram(mensaje, fig=None):
             buf.close()
     except: pass
 
-def preparar_datos_inversion(df):
+def preparar_datos(df):
     df = df.copy()
     df['SMA_50'] = df['Close'].rolling(50).mean()
     df['SMA_200'] = df['Close'].rolling(200).mean()
-    
-    # RSI de 30 días para ver la tendencia real, no el ruido
     delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(30).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(30).mean()
-    df['RSI_Largo'] = 100 - (100 / (1 + (gain/loss)))
-    
-    # Indicador de "Barato/Caro": Distancia porcentual a la media de 200
-    df['Distancia_SMA200'] = (df['Close'] - df['SMA_200']) / df['SMA_200']
-    
-    # Volatilidad para Stop Loss de largo plazo
-    df['ATR'] = df[['High', 'Low', 'Close']].apply(lambda x: max(x['High']-x['Low'], abs(x['High']-x['Close']), abs(x['Low']-x['Close'])), axis=1).rolling(21).mean()
-    
+    gain = (delta.where(delta > 0, 0)).rolling(25).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(25).mean()
+    df['RSI'] = 100 - (100 / (1 + (gain/loss)))
+    df['ATR'] = df[['High', 'Low', 'Close']].apply(lambda x: max(x['High']-x['Low'], abs(x['High']-x['Close']), abs(x['Low']-x['Close'])), axis=1).rolling(20).mean()
     return df.dropna()
 
-# --- UNIVERSO AMPLIADO ---
-argentinas = ['YPF', 'GGAL', 'BMA', 'PAM', 'VIST', 'TGS', 'CEPU', 'CRESY', 'TXAR.BA', 'ALUA.BA', 'COME.BA', 'BYMA.BA']
-usa = ['AAPL', 'MSFT', 'AMZN', 'NVDA', 'GOOGL', 'META', 'TSLA', 'JPM', 'XOM', 'KO', 'DIS', 'NFLX', 'PYPL', 'BABA']
+# --- UNIVERSO MASIVO (ARG + USA) ---
+argentinas = [
+    'YPF', 'GGAL', 'BMA', 'PAM', 'VIST', 'TGS', 'CEPU', 'CRESY', 'LOMA', 'TEO', 
+    'EDN', 'BBAR', 'SUPV', 'TXAR.BA', 'ALUA.BA', 'TGNO4.BA', 'TRAN.BA', 'COME.BA', 
+    'BYMA.BA', 'VALO.BA', 'MIRG.BA', 'AGRO.BA', 'LEDE.BA', 'MORI.BA', 'CGPA2.BA'
+]
+
+# Top 80 del S&P 500 (Tecnología, Bancos, Consumo, Energía)
+usa = [
+    'AAPL', 'MSFT', 'AMZN', 'NVDA', 'GOOGL', 'META', 'TSLA', 'BRK-B', 'JPM', 'UNH',
+    'V', 'JNJ', 'XOM', 'WMT', 'MA', 'AVGO', 'PG', 'ORCL', 'ADBE', 'ASML', 'COST',
+    'CVX', 'HD', 'LLY', 'BAC', 'PEP', 'KO', 'ABBV', 'MRK', 'AVGO', 'CRM', 'ACN',
+    'AMD', 'NFLX', 'LIN', 'TMO', 'DIS', 'WFC', 'INTU', 'DHR', 'INTC', 'VZ', 'CAT',
+    'AMAT', 'PFE', 'CMCSA', 'IBM', 'NOW', 'UNP', 'TXN', 'GE', 'QCOM', 'PM', 'LOW',
+    'ISRG', 'HON', 'AMGN', 'COP', 'SPGI', 'AXP', 'NKE', 'GS', 'PLTR', 'BABA', 'PYPL',
+    'SQ', 'UBER', 'SNOW', 'SHOP', 'MELI', 'T', 'X', 'F', 'GM', 'XLF', 'XLK', 'GDX'
+]
+
 universo = argentinas + usa
 
-enviar_telegram("🏦 *INICIANDO ESTRATEGA DE CICLO (2-3 MESES)*\nAnalizando activos con potencial de recuperación...")
+enviar_telegram(f"🏦 *TERMINAL DE INVERSIÓN GLOBAL*\nEscaneando {len(universo)} activos en Argentina y USA...")
 
+encontrados = 0
 for ticker in universo:
     try:
         data = yf.download(ticker, period="3y", progress=False)
+        if data.empty or len(data) < 250: continue
         if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
         
-        data = preparar_datos_inversion(data)
+        df = preparar_datos(data)
         
-        # ENTRENAMIENTO: Buscamos 12% de ganancia en 3 meses (63 días hábiles)
-        data['Retorno_3M'] = (data['Close'].shift(-63) - data['Close']) / data['Close']
-        data['Target'] = np.where(data['Retorno_3M'] > 0.12, 1, 0)
+        # IA entrenada para detectar retornos de +10% en 3 meses (60 días hábiles)
+        df['Ret_60'] = (df['Close'].shift(-60) - df['Close']) / df['Close']
+        df['Target'] = np.where(df['Ret_60'] > 0.10, 1, 0)
         
-        features = ['Close', 'SMA_50', 'SMA_200', 'RSI_Largo', 'Distancia_SMA200']
-        train_data = data.dropna()
+        train = df.dropna()
+        if len(train) < 100: continue
         
-        if len(train_data) < 200: continue
+        features = ['Close', 'SMA_50', 'SMA_200', 'RSI']
+        model = RandomForestClassifier(n_estimators=70, random_state=42)
+        model.fit(train[features].iloc[:-60], train['Target'].iloc[:-60])
+        
+        prob = model.predict_proba(train[features].iloc[-1:]) [0][1]
+        actual = train.iloc[-1]
+        
+        # FILTRO DE COMPRA (IA > 55% y sin sobrecompra extrema)
+        if prob > 0.55 and actual['RSI'] < 70:
+            encontrados += 1
+            stop = actual['Close'] - (actual['ATR'] * 4) # Stop amplio para inversión
+            target = actual['Close'] * 1.25 # Objetivo 25% de suba
             
-        model = RandomForestClassifier(n_estimators=100, random_state=42)
-        model.fit(train_data[features].iloc[:-63], train_data['Target'].iloc[:-63])
-        
-        ultima_fila = train_data[features].iloc[-1:]
-        prob = model.predict_proba(ultima_fila)[0][1]
-        actual = train_data.iloc[-1]
-        
-        # NUEVA LÓGICA DE FILTRADO (Más inteligente, menos rígida)
-        # 1. Confianza IA superior al 60%
-        # 2. No compramos si está en el techo (RSI < 65)
-        # 3. Que el precio esté "viva" (RSI > 40) o cerca de recuperar medias
-        
-        if prob > 0.60 and actual['RSI_Largo'] < 65:
-            # Stop Loss de Inversionista (no de trader)
-            stop_loss = actual['Close'] - (actual['ATR'] * 4) 
-            take_profit = actual['Close'] * 1.25 # Objetivo +25%
+            tipo = "🇦🇷 ARG" if ticker in argentinas else "🇺🇸 USA/INT"
+            msj = (f"🏛️ *SEÑAL ESTRUCTURAL ({tipo}): {ticker}*\n"
+                   f"Horizonte: `2 a 3 Meses`\n\n"
+                   f"💵 Entrada: *${actual['Close']:.2f}*\n"
+                   f"🛡️ Stop Sugerido: *${stop:.2f}*\n"
+                   f"🎯 Objetivo Largo: *${target:.2f}*\n\n"
+                   f"📊 Confianza Motor IA: `{prob:.1%}`\n"
+                   f"📌 Estado: `Tendencia de Fondo en Desarrollo`")
             
-            mensaje = (
-                f"🏛️ *OPORTUNIDAD ESTRUCTURAL: {ticker}*\n"
-                f"Horizonte: `2 a 3 Meses`\n\n"
-                f"💰 Precio Entrada: *${actual['Close']:.2f}*\n"
-                f"🛡️ Stop Loss (Largo): *${stop_loss:.2f}*\n"
-                f"🚀 Objetivo 3M: *${take_profit:.2f}*\n\n"
-                f"📊 Probabilidad de éxito: `{prob:.1%}`\n"
-                f"💡 Nota: `Captura de valor por ciclo de mediano plazo.`"
-            )
-            
-            # Gráfico de 1 año para ver el contexto
-            df_plot = train_data.iloc[-250:]
             fig, ax = plt.subplots(figsize=(10, 5))
             fig.patch.set_facecolor('#0a192f'); ax.set_facecolor('#0a192f')
-            ax.plot(df_plot.index, df_plot['Close'], color='white', label='Precio', linewidth=1.5)
-            ax.plot(df_plot.index, df_plot['SMA_200'], color='magenta', label='SMA 200', linewidth=2)
-            ax.fill_between(df_plot.index, actual['Close'], stop_loss, color='red', alpha=0.1)
-            ax.set_title(f"Análisis de Ciclo: {ticker}", color='white')
-            ax.tick_params(colors='white'); ax.legend()
+            ax.plot(train.index[-250:], train['Close'].iloc[-250:], color='white', label='Precio', linewidth=1.5)
+            ax.plot(train.index[-250:], train['SMA_200'].iloc[-250:], color='#FF00FF', label='SMA 200', linewidth=2)
+            ax.set_title(f"Planificación 90 días: {ticker}", color='white', fontweight='bold')
+            ax.tick_params(colors='white'); ax.legend(facecolor='#112240', labelcolor='white')
+            ax.grid(alpha=0.2)
             
-            enviar_telegram(mensaje, fig)
+            enviar_telegram(msj, fig)
             plt.close(fig)
 
-    except Exception as e: print(f"Error en {ticker}: {e}")
+    except: continue
 
-enviar_telegram("✅ *Escaneo de Ciclo Finalizado.*")
+if encontrados == 0:
+    enviar_telegram("🛡️ *Reporte Final:* No se hallaron activos con ventaja estadística clara hoy. El sistema prioriza la preservación de capital.")
+else:
+    enviar_telegram(f"✅ *Análisis Completo:* Se detectaron {encontrados} oportunidades estructurales para tu portafolio.")

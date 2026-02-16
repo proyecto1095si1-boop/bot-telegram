@@ -114,23 +114,3 @@ if encontrados == 0:
     enviar_telegram("🛡️ *Reporte Final:* No se hallaron activos con ventaja estadística clara hoy. El sistema prioriza la preservación de capital.")
 else:
     enviar_telegram(f"✅ *Análisis Completo:* Se detectaron {encontrados} oportunidades estructurales para tu portafolio.")
-
-# COPIA ESTO PARA PROBAR SI EL BOT ESTÁ VIVO
-import yfinance as yf
-import requests
-
-TOKEN = '8173318113:AAFK_OM25CfTAmrmhR1pzwpvcQJWmWzbZg0'
-CHAT_ID = '6550986355'
-
-def enviar(msg):
-    requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", data={'chat_id': CHAT_ID, 'text': msg})
-
-enviar("🛰️ MODO TEST: El bot está vivo. Escaneando Argentina...")
-
-# Probamos con las 3 más activas
-for t in ['YPF', 'GGAL', 'AAPL']:
-    data = yf.download(t, period="1mo", progress=False)
-    precio = data['Close'].iloc[-1]
-    enviar(f"✅ Conexión con {t} exitosa. Precio: ${precio:.2f}")
-
-enviar("Fin de la prueba de conexión.")

@@ -7,155 +7,106 @@ import requests
 import io
 import warnings
 import sys
+
 warnings.filterwarnings('ignore')
 
-# --- 1. CREDENCIALES DE TELEGRAM ---
-# Usamos tu bot @Nahuelsi_bot
+# --- CONFIGURACIÓN ---
 TOKEN = '8173318113:AAFK_OM25CfTAmrmhR1pzwpvcQJWmWzbZg0'
 CHAT_ID = '6550986355'
 
 def enviar_telegram(mensaje, fig=None):
-    """Envía texto y gráfico estructural a Telegram."""
     try:
         url_texto = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
         requests.post(url_texto, data={'chat_id': CHAT_ID, 'text': mensaje, 'parse_mode': 'Markdown'})
-        
         if fig is not None:
             buf = io.BytesIO()
-            fig.savefig(buf, format='png', bbox_inches='tight', dpi=150, facecolor='#0a192f') # Azul muy oscuro para el bot macro
+            fig.savefig(buf, format='png', bbox_inches='tight', dpi=150, facecolor='#0a192f')
             buf.seek(0)
             url_foto = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
             requests.post(url_foto, data={'chat_id': CHAT_ID}, files={'photo': buf})
             buf.close()
-    except Exception as e:
-        pass
+    except: pass
 
-# --- 2. UNIVERSO DE ACTIVOS GLOBALES ---
-print("Inicializando Radar Macro (1 Mes)... Conectando a @Nahuelsi_bot...")
-argentinas = ['YPF', 'GGAL', 'BMA', 'PAM', 'VIST', 'TGS', 'CEPU', 'CRESY', 'LOMA', 'TEO', 
-              'EDN', 'IRS', 'SUPV', 'BBAR', 'TXAR.BA', 'ALUA.BA', 'TGNO4.BA', 'TRAN.BA', 
-              'PAMP.BA', 'COME.BA', 'BYMA.BA', 'VALO.BA', 'MIRG.BA', 'CVH.BA', 'AGRO.BA']
-
-url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-headers = {'User-Agent': 'Mozilla/5.0'}
-try:
-    tabla = pd.read_html(url, storage_options=headers)[0]
-    tickers_sp500 = [t.replace('.', '-') for t in tabla['Symbol'].tolist()]
-except:
-    tickers_sp500 = ['AAPL', 'MSFT', 'AMZN', 'NVDA', 'GOOGL', 'META', 'TSLA', 'BRK-B', 'JPM']
-
-universo = argentinas + tickers_sp500[:75]
-print(f"Universo consolidado: {len(universo)} activos.\n")
-
-# --- 3. FUNCIONES DEL MOTOR (POSITION TRADING 1 MES) ---
-def preparar_datos_mensuales(df):
+def preparar_datos_inversion(df):
     df = df.copy()
+    # Medias Móviles para Tendencia de Fondo
     df['SMA_50'] = df['Close'].rolling(50).mean()
-    df['SMA_200'] = df['Close'].rolling(200).mean() # EL RADAR MACRO
-    df['Vol_SMA_21'] = df['Volume'].rolling(21).mean()
+    df['SMA_200'] = df['Close'].rolling(200).mean()
     
+    # RSI de largo plazo (más suave)
     delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(21).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(21).mean()
-    rs = gain / loss
-    df['RSI_Mensual'] = 100 - (100 / (1 + rs))
+    gain = (delta.where(delta > 0, 0)).rolling(30).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(30).mean()
+    df['RSI_Largo'] = 100 - (100 / (1 + (gain/loss)))
     
-    df['TR'] = df[['High', 'Low', 'Close']].apply(lambda x: max(x['High'] - x['Low'], abs(x['High'] - x['Close']), abs(x['Low'] - x['Close'])), axis=1)
-    df['ATR'] = df['TR'].rolling(21).mean()
-    df['Var_1M_Pasado'] = df['Close'].pct_change(21)
+    # Distancia a la SMA 200 (para ver si está "barata")
+    df['Distancia_SMA200'] = (df['Close'] - df['SMA_200']) / df['SMA_200']
+    
+    # Volatilidad para el Stop Loss de 3 meses
+    df['ATR'] = df[['High', 'Low', 'Close']].apply(lambda x: max(x['High']-x['Low'], abs(x['High']-x['Close']), abs(x['Low']-x['Close'])), axis=1).rolling(21).mean()
+    
     return df.dropna()
 
-def generar_grafico_macro_memoria(ticker, df_plot, stop_loss, take_profit):
-    """Crea el gráfico estructural en memoria para Telegram."""
-    df_plot = df_plot.iloc[-250:].copy() # Mostramos casi 1 año para ver la SMA 200
-    precio_actual = df_plot['Close'].iloc[-1]
-    
-    fig, ax = plt.subplots(figsize=(10, 5))
-    fig.patch.set_facecolor('#0a192f')
-    ax.set_facecolor('#0a192f')
-    
-    ax.plot(df_plot.index, df_plot['Close'], label='Precio', color='white', linewidth=1.5)
-    ax.plot(df_plot.index, df_plot['SMA_50'], label='SMA 50', color='#00FFFF', linestyle='--', alpha=0.8)
-    ax.plot(df_plot.index, df_plot['SMA_200'], label='SMA 200 (Macro)', color='#FF00FF', linewidth=2.5) # Línea magenta gruesa
-    
-    ax.axhline(precio_actual, color='#FFA500', linestyle='-', linewidth=2, label=f'Entrada: ${precio_actual:.2f}')
-    ax.axhline(stop_loss, color='#FF3333', linestyle='-', linewidth=2, label=f'Stop Loss: ${stop_loss:.2f}')
-    ax.axhline(take_profit, color='#33FF33', linestyle='-', linewidth=2, label=f'Take Profit: ${take_profit:.2f}')
-    
-    ax.set_title(f'Visión Estructural (1 Mes): {ticker}', color='white', fontsize=14, fontweight='bold')
-    ax.tick_params(colors='white')
-    ax.legend(loc='upper left', facecolor='#112240', edgecolor='white', labelcolor='white')
-    ax.grid(color='gray', linestyle=':', alpha=0.3)
-    
-    plt.close(fig)
-    return fig
+# --- UNIVERSO ---
+argentinas = ['YPF', 'GGAL', 'BMA', 'PAM', 'VIST', 'TGS', 'CEPU', 'CRESY', 'TXAR.BA', 'ALUA.BA']
+usa = ['AAPL', 'MSFT', 'AMZN', 'NVDA', 'GOOGL', 'META', 'TSLA', 'JPM', 'XOM', 'KO', 'DIS', 'NFLX']
+universo = argentinas + usa
 
-# --- 4. EJECUCIÓN DEL ESCÁNER MACRO ---
-enviar_telegram("🏛️ *Motor Estructural Iniciado*\nBuscando tendencias a 1 mes (Filtro SMA 200)...")
-resultados = []
-activos_procesados = 0
+enviar_telegram("🏦 *Iniciando Radar de Inversión (2-3 Meses)*\nBuscando valor estructural...")
 
 for ticker in universo:
-    activos_procesados += 1
-    sys.stdout.write(f"\rAnalizando macro... [{activos_procesados}/{len(universo)}]: {ticker}    ")
-    sys.stdout.flush()
-    
     try:
         data = yf.download(ticker, period="3y", progress=False)
         if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
-        if data.empty or 'Close' not in data.columns or len(data) < 300: continue
-            
-        for col in ['Open', 'High', 'Low', 'Close', 'Volume']: data[col] = data[col].squeeze()
-            
-        data = preparar_datos_mensuales(data)
         
-        # TARGET 1 MES: 8% de retorno
-        data['Retorno_Futuro_1M'] = (data['Close'].shift(-21) - data['Close']) / data['Close']
-        data['Target'] = np.where(data['Retorno_Futuro_1M'] > 0.08, 1, 0)
-        data = data.dropna()
+        data = preparar_datos_inversion(data)
         
-        features = ['Close', 'Volume', 'SMA_50', 'SMA_200', 'RSI_Mensual', 'Vol_SMA_21', 'ATR']
-        X = data[features]
-        y = data['Target']
-        if len(X) < 150: continue
-            
-        model = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42)
-        model.fit(X.iloc[:int(len(X)*0.8)], y.iloc[:int(len(y)*0.8)])
+        # Objetivo a 3 meses (63 días hábiles)
+        data['Retorno_3M'] = (data['Close'].shift(-63) - data['Close']) / data['Close']
+        data['Target'] = np.where(data['Retorno_3M'] > 0.12, 1, 0) # Buscamos +12% en 3 meses
         
-        importancias = model.feature_importances_
-        driver_principal = features[np.argmax(importancias)]
+        features = ['Close', 'SMA_50', 'SMA_200', 'RSI_Largo', 'Distancia_SMA200']
+        train_data = data.dropna()
         
-        ultima_fila = X.iloc[-1:]
-        precio_actual = float(ultima_fila['Close'].iloc[0])
-        sma_50 = float(data['SMA_50'].iloc[-1])
-        sma_200 = float(data['SMA_200'].iloc[-1])
-        atr = float(data['ATR'].iloc[-1])
-        prob_suba = model.predict_proba(ultima_fila)[0][1]
+        model = RandomForestClassifier(n_estimators=100, random_state=42)
+        model.fit(train_data[features].iloc[:-63], train_data['Target'].iloc[:-63])
         
-        # FILTRO INSTITUCIONAL PARA PORTAFOLIO
-        if prob_suba > 0.65 and precio_actual > sma_50 and precio_actual > sma_200:
-            stop_loss = precio_actual - (atr * 3.5)  # Respiro amplio
-            take_profit = precio_actual + (atr * 7.0) # Objetivo macro
+        ultima_fila = train_data[features].iloc[-1:]
+        prob = model.predict_proba(ultima_fila)[0][1]
+        
+        actual = train_data.iloc[-1]
+        
+        # CONDICIÓN DE INVERSIÓN (Menos rígida que la anterior)
+        # 1. Probabilidad IA > 60%
+        # 2. Que no esté extremadamente sobrecomprada (RSI < 70)
+        # 3. Que el precio esté cerca o recuperando la SMA 200 (no necesariamente arriba)
+        
+        if prob > 0.60 and actual['RSI_Largo'] < 70:
+            stop_loss = actual['Close'] - (actual['ATR'] * 4) # Stop bien ancho
+            take_profit = actual['Close'] * 1.25 # Objetivo +25%
             
             mensaje = (
-                f"📈 *ALERTA ESTRUCTURAL: {ticker}*\n"
-                f"Horizonte: `Portafolio (1 Mes)`\n\n"
-                f"💵 Entrada: *${precio_actual:.2f}*\n"
-                f"🛑 Stop Loss: *${stop_loss:.2f}*\n"
-                f"🎯 Take Profit: *${take_profit:.2f}*\n\n"
-                f"🛡️ Estado: `Sobre SMA 200`\n"
-                f"🧠 Motor IA: `{driver_principal}`"
+                f"🏛️ *OPORTUNIDAD DE INVERSIÓN: {ticker}*\n"
+                f"Plazo estimado: `2 a 3 meses`\n\n"
+                f"💰 Precio actual: *${actual['Close']:.2f}*\n"
+                f"🛡️ Piso sugerido: *${stop_loss:.2f}*\n"
+                f"🚀 Objetivo: *${take_profit:.2f}*\n\n"
+                f"📊 Confianza IA: `{prob:.1%}`\n"
+                f"💡 Nota: `Filtro SMA 200 flexibilizado para captura de valor`"
             )
-            figura = generar_grafico_macro_memoria(ticker, data, stop_loss, take_profit)
-            enviar_telegram(mensaje, figura)
-            resultados.append(ticker)
             
-    except Exception as e: pass 
+            # Generar gráfico
+            df_plot = train_data.iloc[-250:]
+            fig, ax = plt.subplots(figsize=(10, 5))
+            fig.patch.set_facecolor('#0a192f'); ax.set_facecolor('#0a192f')
+            ax.plot(df_plot.index, df_plot['Close'], color='white', label='Precio')
+            ax.plot(df_plot.index, df_plot['SMA_200'], color='magenta', label='SMA 200 (Tendencia)')
+            ax.axhline(actual['Close'], color='orange', linestyle='--')
+            ax.tick_params(colors='white'); ax.legend()
+            
+            enviar_telegram(mensaje, fig)
+            plt.close(fig)
 
-# --- 5. CIERRE DEL REPORTE ---
-if len(resultados) == 0:
-    enviar_telegram("🛡️ *Análisis Estructural Finalizado*\nNinguna empresa superó el filtro de la SMA 200 con ventaja matemática mensual. Mantener liquidez.")
-    print("\n[!] Análisis finalizado. El mercado no ofrece tendencias largas seguras hoy.")
-else:
-    enviar_telegram(f"✅ *Escaneo Terminado*\nSe enviaron {len(resultados)} alertas para el portafolio mensual.")
-    print(f"\n[+] Análisis finalizado. {len(resultados)} alertas enviadas a @Nahuelsi_bot.")
+    except Exception as e: print(f"Error en {ticker}: {e}")
+
+enviar_telegram("✅ *Escaneo de Inversión Finalizado.*")

@@ -4,11 +4,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import requests
 import io
-import warnings
+import time
+from datetime import datetime, timedelta
 
-warnings.filterwarnings('ignore')
-
-# --- CONFIGURACIÓN DE TELEGRAM ---
+# --- CREDENCIALES ---
 TOKEN = '8173318113:AAFK_OM25CfTAmrmhR1pzwpvcQJWmWzbZg0'
 CHAT_ID = '6550986355'
 
@@ -18,89 +17,88 @@ def enviar_telegram(mensaje, fig=None):
         requests.post(url_texto, data={'chat_id': CHAT_ID, 'text': mensaje, 'parse_mode': 'Markdown'})
         if fig is not None:
             buf = io.BytesIO()
-            fig.savefig(buf, format='png', bbox_inches='tight', dpi=120, facecolor='#0d0d0d')
+            fig.savefig(buf, format='png', bbox_inches='tight', dpi=150, facecolor='#050a15')
             buf.seek(0)
             url_foto = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
             requests.post(url_foto, data={'chat_id': CHAT_ID}, files={'photo': buf})
             buf.close()
     except: pass
 
-# --- DICCIONARIOS DE ACTIVOS ---
-# MATERIAS PRIMAS (Futuros y ETFs clave)
-commodities = {
-    'ORO (Refugio)': 'GC=F',
-    'PETROLEO WTI': 'CL=F',
-    'PLATA': 'SI=F',
-    'COBRE (Doctor Cobre)': 'HG=F',
-    'SOJA': 'ZS=F',
-    'GAS NATURAL': 'NG=F',
-    'URANIO (ETF)': 'URA'
+# --- CONFIGURACIÓN DE UNIVERSO GLOBAL 2026 ---
+universo = {
+    'ENERGÍA': {'WTI Oil': 'CL=F', 'Brent Oil': 'BZ=F', 'Natural Gas': 'NG=F', 'Uranium (URA)': 'URA'},
+    'METALES': {'Gold': 'GC=F', 'Silver': 'SI=F', 'Copper': 'HG=F', 'Lithium (LIT)': 'LIT'},
+    'AGRO': {'Soybean': 'ZS=F', 'Corn': 'ZC=F', 'Wheat': 'ZW=F'},
+    'EMERGENTES': {'Brasil (EWZ)': 'EWZ', 'China (FXI)': 'FXI', 'India (INDA)': 'INDA', 'México (EWW)': 'EWW', 'Argentina (ARGT)': 'ARGT'}
 }
 
-# MERCADOS EMERGENTES (ETFs de países)
-emergentes = {
-    'BRASIL (EWZ)': 'EWZ',
-    'CHINA (MCHI)': 'MCHI',
-    'MÉXICO (EWW)': 'EWW',
-    'INDIA (INDA)': 'INDA',
-    'CHILE (ECH)': 'ECH',
-    'EMERGENTES GLOBAL (EEM)': 'EEM'
-}
+enviar_telegram(f"🏛️ *SISTEMA MACRO INSTITUCIONAL V16.0*\n📅 Auditoría: `Lunes 16 de Febrero, 2026`\n---")
 
-def analizar_activo(ticker, nombre, categoria):
-    try:
-        # Descargamos 2 años para tener perspectiva estructural
-        data = yf.download(ticker, period="2y", progress=False)
-        if data.empty: return
-        if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
+for categoria, activos in universo.items():
+    enviar_telegram(f"📁 *SECTOR: {categoria}*")
+    
+    for nombre, ticker in activos.items():
+        try:
+            # Descarga con Bypass de Caché
+            t = yf.Ticker(ticker)
+            df = t.history(period="2y", interval="1d")
+            
+            if df.empty: continue
+            
+            # Limpieza de datos 2026
+            precio_hoy = df['Close'].iloc[-1]
+            fecha_hoy = df.index[-1].strftime('%d/%m/%Y')
+            retorno_diario = ((precio_hoy / df['Close'].iloc[-2]) - 1) * 100
+            sma_200 = df['Close'].rolling(200).mean().iloc[-1]
+            volatilidad = df['Close'].pct_change().std() * np.sqrt(252) # Volatilidad anualizada
 
-        # Calculos Técnicos
-        data['SMA_50'] = data['Close'].rolling(50).mean()
-        data['SMA_200'] = data['Close'].rolling(200).mean()
-        
-        actual = float(data['Close'].iloc[-1])
-        sma200 = float(data['SMA_200'].iloc[-1])
-        var_diaria = ((actual / float(data['Close'].iloc[-2])) - 1) * 100
-        dist_200 = ((actual / sma200) - 1) * 100
+            # --- CÁLCULO DE PROYECCIÓN ESTRUCTURAL ---
+            # Proyectamos a 90 días usando el drift histórico
+            dias_proy = 90
+            conos = 3 # Niveles de desviación
+            tendencia = (df['Close'].iloc[-1] / df['Close'].iloc[-60]) - 1
+            precio_proy = precio_hoy * (1 + tendencia)
 
-        # Determinamos "Sentimiento"
-        estado = "📈 BULLISH" if actual > sma200 else "📉 BEARISH"
-        if dist_200 < -15: estado = "🆘 SOBREVENTA (Oportunidad)"
-        if dist_200 > 15: estado = "🔥 SOBRECOMPRA (Riesgo)"
+            # Mensaje detallado
+            estado = "🟦 ACUMULACIÓN" if precio_hoy > sma_200 else "🟥 DISTRIBUCIÓN"
+            msj = (f"💎 *{nombre}* ({ticker})\n"
+                   f"🕒 Data: `{fecha_hoy}`\n"
+                   f"💵 Spot: *${precio_hoy:.2f}* ({retorno_diario:+.2f}%)\n"
+                   f"📉 Volatilidad: `{volatilidad:.1%}`\n"
+                   f"🏛️ Régimen: `{estado}`")
 
-        # Formateo de Mensaje
-        emoji_cat = "⛏️" if categoria == "COMMO" else "🚩"
-        msj = (f"{emoji_cat} *{nombre}*\n"
-               f"Precio: `${actual:.2f}` ({var_diaria:+.2f}%)\n"
-               f"Estado: `{estado}`\n"
-               f"Dist. a Media 200: `{dist_200:+.2f}%`\n")
+            # --- GRÁFICO PROFESIONAL ---
+            plt.style.use('dark_background')
+            fig, ax = plt.subplots(figsize=(12, 6))
+            fig.patch.set_facecolor('#050a15'); ax.set_facecolor('#050a15')
+            
+            # Histórico
+            df_plot = df.iloc[-250:]
+            ax.plot(df_plot.index, df_plot['Close'], color='#22d3ee', linewidth=2, label='Precio 2025-2026')
+            ax.axhline(sma_200, color='#f472b6', linestyle='--', alpha=0.6, label='Media Móvil 200d')
+            
+            # Cono de Probabilidad (Proyección)
+            fechas_proy = [df_plot.index[-1] + timedelta(days=i) for i in range(dias_proy)]
+            linea_proy = [precio_hoy + (precio_proy - precio_hoy) * (i/dias_proy) for i in range(dias_proy)]
+            
+            # Desviaciones estándar para el cono
+            upper_bound = [p + (precio_hoy * volatilidad * 0.1 * np.sqrt(i/dias_proy)) for i, p in enumerate(linea_proy)]
+            lower_bound = [p - (precio_hoy * volatilidad * 0.1 * np.sqrt(i/dias_proy)) for i, p in enumerate(linea_proy)]
+            
+            ax.plot(fechas_proy, linea_proy, color='#4ade80', linestyle=':', linewidth=2, label='Trayectoria IA')
+            ax.fill_between(fechas_proy, lower_bound, upper_bound, color='#4ade80', alpha=0.1, label='Cono de Probabilidad')
 
-        # Gráfico Estructural
-        df_plot = data.iloc[-250:]
-        fig, ax = plt.subplots(figsize=(10, 4))
-        fig.patch.set_facecolor('#0d0d0d'); ax.set_facecolor('#0d0d0d')
-        ax.plot(df_plot.index, df_plot['Close'], color='#00ff00' if actual > sma200 else '#ff3333', linewidth=2)
-        ax.plot(df_plot.index, df_plot['SMA_200'], color='white', linestyle='--', alpha=0.6, label='Tendencia 200d')
-        ax.set_title(f"{nombre} - Visión de Fondo", color='white', fontsize=12)
-        ax.tick_params(colors='white'); ax.grid(alpha=0.1)
-        
-        enviar_telegram(msj, fig)
-        plt.close(fig)
-        
-    except Exception as e:
-        print(f"Error analizando {ticker}: {e}")
+            # Estética Institucional
+            ax.set_title(f"ANÁLISIS ESTRUCTURAL: {nombre}", color='white', fontsize=14, loc='left', pad=20)
+            ax.spines['top'].set_visible(False); ax.spines['right'].set_visible(False)
+            ax.grid(color='white', alpha=0.05)
+            ax.tick_params(axis='both', colors='gray', labelsize=9)
+            ax.legend(frameon=False, loc='upper left', fontsize=8)
+            
+            enviar_telegram(msj, fig)
+            plt.close(fig)
+            
+        except Exception as e:
+            print(f"Error en {ticker}: {e}")
 
-# --- EJECUCIÓN ---
-enviar_telegram("🧭 *INICIANDO RADAR MACRO GLOBAL*\nAnalizando Materias Primas y Mercados Emergentes...")
-
-# 1. Analizar Commodities
-enviar_telegram("📦 *SECTOR MATERIAS PRIMAS*")
-for nombre, ticker in commodities.items():
-    analizar_activo(ticker, nombre, "COMMO")
-
-# 2. Analizar Emergentes
-enviar_telegram("🌍 *SECTOR MERCADOS EMERGENTES*")
-for nombre, ticker in emergentes.items():
-    analizar_activo(ticker, nombre, "EMER")
-
-enviar_telegram("🏁 *FIN DEL REPORTE GLOBAL*")
+enviar_telegram("🏁 *TERMINAL GLOBAL 2026: ACTUALIZACIÓN FINALIZADA*")

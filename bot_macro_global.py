@@ -1,13 +1,17 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.preprocessing import MinMaxScaler
 import matplotlib.pyplot as plt
 import requests
 import io
-import time
+import warnings
 from datetime import datetime, timedelta
 
-# --- CREDENCIALES ---
+warnings.filterwarnings('ignore')
+
+# --- CONFIGURACIÓN DE ACCESO ---
 TOKEN = '8173318113:AAFK_OM25CfTAmrmhR1pzwpvcQJWmWzbZg0'
 CHAT_ID = '6550986355'
 
@@ -17,88 +21,117 @@ def enviar_telegram(mensaje, fig=None):
         requests.post(url_texto, data={'chat_id': CHAT_ID, 'text': mensaje, 'parse_mode': 'Markdown'})
         if fig is not None:
             buf = io.BytesIO()
-            fig.savefig(buf, format='png', bbox_inches='tight', dpi=150, facecolor='#050a15')
+            fig.savefig(buf, format='png', bbox_inches='tight', dpi=180, facecolor='#020617')
             buf.seek(0)
             url_foto = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
             requests.post(url_foto, data={'chat_id': CHAT_ID}, files={'photo': buf})
             buf.close()
     except: pass
 
-# --- CONFIGURACIÓN DE UNIVERSO GLOBAL 2026 ---
-universo = {
-    'ENERGÍA': {'WTI Oil': 'CL=F', 'Brent Oil': 'BZ=F', 'Natural Gas': 'NG=F', 'Uranium (URA)': 'URA'},
-    'METALES': {'Gold': 'GC=F', 'Silver': 'SI=F', 'Copper': 'HG=F', 'Lithium (LIT)': 'LIT'},
-    'AGRO': {'Soybean': 'ZS=F', 'Corn': 'ZC=F', 'Wheat': 'ZW=F'},
-    'EMERGENTES': {'Brasil (EWZ)': 'EWZ', 'China (FXI)': 'FXI', 'India (INDA)': 'INDA', 'México (EWW)': 'EWW', 'Argentina (ARGT)': 'ARGT'}
+# --- UNIVERSO MAESTRO 2026 ---
+sectores = {
+    '💎 MINERÍA & COMMODITIES': {
+        '🥇 ORO': 'GC=F', '🥈 PLATA': 'SI=F', '🏗️ COBRE': 'HG=F', 
+        '🔋 LITIO': 'LIT', '⚛️ URANIO': 'URA', '🛢️ PETRÓLEO': 'CL=F', '🌽 SOJA': 'ZS=F'
+    },
+    '🇦🇷 ARGENTINA (MERVAL)': {
+        'YPF': 'YPF', 'GALICIA': 'GGAL', 'MACRO': 'BMA', 'PAMPA': 'PAM', 
+        'VISTA': 'VIST', 'TGS': 'TGS', 'ALUAR': 'ALUA.BA', 'TERNIUM': 'TXAR.BA'
+    },
+    '🇺🇸 USA & LONDRES': {
+        'APPLE': 'AAPL', 'NVIDIA': 'NVDA', 'TESLA': 'TSLA', 'MELI': 'MELI',
+        'SHELL': 'SHEL.L', 'BP': 'BP.L', 'HSBC': 'HSBA.L', 'RIO TINTO': 'RIO.L'
+    }
 }
 
-enviar_telegram(f"🏛️ *SISTEMA MACRO INSTITUCIONAL V16.0*\n📅 Auditoría: `Lunes 16 de Febrero, 2026`\n---")
+def procesar_terminal_full(ticker, nombre):
+    t = yf.Ticker(ticker)
+    df = t.history(period="3y", interval="1d")
+    if df.empty or len(df) < 200: return None
 
-for categoria, activos in universo.items():
-    enviar_telegram(f"📁 *SECTOR: {categoria}*")
+    # --- INGENIERÍA DE INDICADORES QUANT ---
+    df['SMA_20'] = df['Close'].rolling(20).mean()
+    df['SMA_200'] = df['Close'].rolling(200).mean()
+    df['STD'] = df['Close'].rolling(20).std()
+    df['Upper'] = df['SMA_20'] + (df['STD'] * 2)
+    df['Lower'] = df['SMA_20'] - (df['STD'] * 2)
+    
+    # RSI & Momentum
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    df['RSI'] = 100 - (100 / (1 + (gain/loss)))
+    df['Momentum'] = df['Close'] / df['Close'].shift(10) - 1
+
+    # --- ENTRENAMIENTO IA V23 (1000 ESTIMADORES) ---
+    df['Target'] = df['Close'].shift(-45)
+    train = df.dropna()
+    features = ['Close', 'SMA_20', 'SMA_200', 'RSI', 'Momentum']
+    
+    model = GradientBoostingRegressor(n_estimators=1000, learning_rate=0.03, max_depth=6, random_state=42)
+    model.fit(train[features].iloc[:-45], train['Target'].iloc[:-45])
+    
+    pred_45d = model.predict(df[features].iloc[-1:])[0]
+    precio_act = df['Close'].iloc[-1]
+    
+    # --- ANÁLISIS DE SENTIMIENTO & FUNDAMENTOS ---
+    info = t.info
+    per = info.get('trailingPE', 'N/A')
+    mkt_cap = info.get('marketCap', 0) / 1e9
+    noticias = t.news[:2]
+    titulares = " | ".join([n['title'] for n in noticias]) if noticias else "Sin noticias relevantes."
+
+    return df, {'pred': pred_45d, 'per': per, 'cap': mkt_cap, 'news': titulares, 'precio': precio_act}
+
+enviar_telegram("🏛️ *TERMINAL QUANT OMNISCIENTE V23.0*\nSincronizado: `Lunes 16 de Febrero, 2026`\n_Ejecutando Modelos de Alta Intensidad..._")
+
+for cat_nombre, activos in sectores.items():
+    enviar_telegram(f"📁 *SECTOR:* {cat_nombre}")
     
     for nombre, ticker in activos.items():
         try:
-            # Descarga con Bypass de Caché
-            t = yf.Ticker(ticker)
-            df = t.history(period="2y", interval="1d")
+            res = procesar_terminal_full(ticker, nombre)
+            if not res: continue
+            df, data = res
             
-            if df.empty: continue
+            p = data['precio']
+            diff_proy = ((data['pred'] / p) - 1) * 100
+            fecha_proy = df.index[-1] + timedelta(days=45)
             
-            # Limpieza de datos 2026
-            precio_hoy = df['Close'].iloc[-1]
-            fecha_hoy = df.index[-1].strftime('%d/%m/%Y')
-            retorno_diario = ((precio_hoy / df['Close'].iloc[-2]) - 1) * 100
-            sma_200 = df['Close'].rolling(200).mean().iloc[-1]
-            volatilidad = df['Close'].pct_change().std() * np.sqrt(252) # Volatilidad anualizada
+            # Formateo de Mensaje Institucional
+            msj = (f"💎 *{nombre}* (`{ticker}`)\n"
+                   f"💰 Precio: *${p:.2f}* | RSI: `{df['RSI'].iloc[-1]:.1f}`\n"
+                   f"🏛️ Cap. Mercado: `${data['cap']:.1f}B` | P/E: `{data['per']}`\n\n"
+                   f"🧠 *PROYECCIÓN IA (ABRIL 2026):*\n"
+                   f"🎯 Tentativa: *${data['pred']:.2f}* ({diff_proy:+.2f}%)\n"
+                   f"📉 Riesgo (STD): `±{df['STD'].iloc[-1]:.2f}`\n\n"
+                   f"📰 *SENTIMIENTO:* \n_{data['news']}_")
 
-            # --- CÁLCULO DE PROYECCIÓN ESTRUCTURAL ---
-            # Proyectamos a 90 días usando el drift histórico
-            dias_proy = 90
-            conos = 3 # Niveles de desviación
-            tendencia = (df['Close'].iloc[-1] / df['Close'].iloc[-60]) - 1
-            precio_proy = precio_hoy * (1 + tendencia)
-
-            # Mensaje detallado
-            estado = "🟦 ACUMULACIÓN" if precio_hoy > sma_200 else "🟥 DISTRIBUCIÓN"
-            msj = (f"💎 *{nombre}* ({ticker})\n"
-                   f"🕒 Data: `{fecha_hoy}`\n"
-                   f"💵 Spot: *${precio_hoy:.2f}* ({retorno_diario:+.2f}%)\n"
-                   f"📉 Volatilidad: `{volatilidad:.1%}`\n"
-                   f"🏛️ Régimen: `{estado}`")
-
-            # --- GRÁFICO PROFESIONAL ---
+            # --- GRÁFICO NIVEL PROFESIONAL ---
             plt.style.use('dark_background')
             fig, ax = plt.subplots(figsize=(12, 6))
-            fig.patch.set_facecolor('#050a15'); ax.set_facecolor('#050a15')
+            fig.patch.set_facecolor('#020617'); ax.set_facecolor('#020617')
             
-            # Histórico
-            df_plot = df.iloc[-250:]
-            ax.plot(df_plot.index, df_plot['Close'], color='#22d3ee', linewidth=2, label='Precio 2025-2026')
-            ax.axhline(sma_200, color='#f472b6', linestyle='--', alpha=0.6, label='Media Móvil 200d')
+            # Eje Histórico (Velas/Línea)
+            df_p = df.iloc[-180:]
+            ax.plot(df_p.index, df_p['Close'], color='#38bdf8', linewidth=2, label='Precio 2026')
+            ax.fill_between(df_p.index, df_p['Lower'], df_p['Upper'], color='#38bdf8', alpha=0.05, label='Bandas Volatilidad')
+            ax.plot(df_p.index, df_p['SMA_200'], color='#f43f5e', alpha=0.4, label='Estructura de Fondo')
             
-            # Cono de Probabilidad (Proyección)
-            fechas_proy = [df_plot.index[-1] + timedelta(days=i) for i in range(dias_proy)]
-            linea_proy = [precio_hoy + (precio_proy - precio_hoy) * (i/dias_proy) for i in range(dias_proy)]
+            # Eje Proyección IA
+            fechas_fut = [df_p.index[-1], fecha_proy]
+            precios_fut = [p, data['pred']]
+            ax.plot(fechas_fut, precios_fut, color='#10b981', linestyle='--', marker='o', markersize=8, linewidth=2.5, label='Proyección IA')
             
-            # Desviaciones estándar para el cono
-            upper_bound = [p + (precio_hoy * volatilidad * 0.1 * np.sqrt(i/dias_proy)) for i, p in enumerate(linea_proy)]
-            lower_bound = [p - (precio_hoy * volatilidad * 0.1 * np.sqrt(i/dias_proy)) for i, p in enumerate(linea_proy)]
-            
-            ax.plot(fechas_proy, linea_proy, color='#4ade80', linestyle=':', linewidth=2, label='Trayectoria IA')
-            ax.fill_between(fechas_proy, lower_bound, upper_bound, color='#4ade80', alpha=0.1, label='Cono de Probabilidad')
-
-            # Estética Institucional
-            ax.set_title(f"ANÁLISIS ESTRUCTURAL: {nombre}", color='white', fontsize=14, loc='left', pad=20)
+            # Etiquetas y Estética
+            ax.set_title(f"Quantum Analysis: {nombre}", color='white', loc='left', fontsize=14, fontweight='bold')
+            ax.grid(color='#1e293b', alpha=0.3)
             ax.spines['top'].set_visible(False); ax.spines['right'].set_visible(False)
-            ax.grid(color='white', alpha=0.05)
-            ax.tick_params(axis='both', colors='gray', labelsize=9)
-            ax.legend(frameon=False, loc='upper left', fontsize=8)
+            ax.legend(frameon=False, loc='upper left', fontsize='small')
             
             enviar_telegram(msj, fig)
             plt.close(fig)
             
-        except Exception as e:
-            print(f"Error en {ticker}: {e}")
+        except Exception as e: print(f"Error en {ticker}: {e}")
 
-enviar_telegram("🏁 *TERMINAL GLOBAL 2026: ACTUALIZACIÓN FINALIZADA*")
+enviar_telegram("✅ *TERMINAL 2026: ESCANEO TOTAL COMPLETADO*")

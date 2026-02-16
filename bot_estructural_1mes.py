@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import requests
 import io
 import warnings
+from datetime import datetime, timedelta
 
 warnings.filterwarnings('ignore')
 
@@ -37,40 +38,27 @@ def preparar_datos(df):
     df['ATR'] = df[['High', 'Low', 'Close']].apply(lambda x: max(x['High']-x['Low'], abs(x['High']-x['Close']), abs(x['Low']-x['Close'])), axis=1).rolling(20).mean()
     return df.dropna()
 
-# --- UNIVERSO MASIVO (ARG + USA) ---
-argentinas = [
-    'YPF', 'GGAL', 'BMA', 'PAM', 'VIST', 'TGS', 'CEPU', 'CRESY', 'LOMA', 'TEO', 
-    'EDN', 'BBAR', 'SUPV', 'TXAR.BA', 'ALUA.BA', 'TGNO4.BA', 'TRAN.BA', 'COME.BA', 
-    'BYMA.BA', 'VALO.BA', 'MIRG.BA', 'AGRO.BA', 'LEDE.BA', 'MORI.BA', 'CGPA2.BA'
-]
-
-# Top 80 del S&P 500 (Tecnología, Bancos, Consumo, Energía)
-usa = [
-    'AAPL', 'MSFT', 'AMZN', 'NVDA', 'GOOGL', 'META', 'TSLA', 'BRK-B', 'JPM', 'UNH',
-    'V', 'JNJ', 'XOM', 'WMT', 'MA', 'AVGO', 'PG', 'ORCL', 'ADBE', 'ASML', 'COST',
-    'CVX', 'HD', 'LLY', 'BAC', 'PEP', 'KO', 'ABBV', 'MRK', 'AVGO', 'CRM', 'ACN',
-    'AMD', 'NFLX', 'LIN', 'TMO', 'DIS', 'WFC', 'INTU', 'DHR', 'INTC', 'VZ', 'CAT',
-    'AMAT', 'PFE', 'CMCSA', 'IBM', 'NOW', 'UNP', 'TXN', 'GE', 'QCOM', 'PM', 'LOW',
-    'ISRG', 'HON', 'AMGN', 'COP', 'SPGI', 'AXP', 'NKE', 'GS', 'PLTR', 'BABA', 'PYPL',
-    'SQ', 'UBER', 'SNOW', 'SHOP', 'MELI', 'T', 'X', 'F', 'GM', 'XLF', 'XLK', 'GDX'
-]
-
+# --- UNIVERSO MASIVO ---
+argentinas = ['YPF', 'GGAL', 'BMA', 'PAM', 'VIST', 'TGS', 'CEPU', 'CRESY', 'TXAR.BA', 'ALUA.BA', 'EDN', 'BBAR', 'BYMA.BA', 'COME.BA']
+usa = ['AAPL', 'MSFT', 'AMZN', 'NVDA', 'GOOGL', 'META', 'TSLA', 'JPM', 'XOM', 'WMT', 'LLY', 'AVGO', 'MELI', 'BABA', 'PYPL']
 universo = argentinas + usa
 
-enviar_telegram(f"🏦 *TERMINAL DE INVERSIÓN GLOBAL*\nEscaneando {len(universo)} activos en Argentina y USA...")
+fecha_hoy = datetime.now().strftime('%Y-%m-%d')
+enviar_telegram(f"📡 *ESCÁNER PROYECTIVO 2026*\nFecha: `{fecha_hoy}`\nAnalizando {len(universo)} activos...")
 
 encontrados = 0
 for ticker in universo:
     try:
-        data = yf.download(ticker, period="3y", progress=False)
-        if data.empty or len(data) < 250: continue
+        # Descarga forzada a 2026
+        data = yf.download(ticker, start="2024-01-01", end=fecha_hoy, progress=False)
+        if data.empty or len(data) < 200: continue
         if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
         
         df = preparar_datos(data)
         
-        # IA entrenada para detectar retornos de +10% en 3 meses (60 días hábiles)
+        # IA entrenada para detectar retornos de +12% en 60 días
         df['Ret_60'] = (df['Close'].shift(-60) - df['Close']) / df['Close']
-        df['Target'] = np.where(df['Ret_60'] > 0.10, 1, 0)
+        df['Target'] = np.where(df['Ret_60'] > 0.12, 1, 0)
         
         train = df.dropna()
         if len(train) < 100: continue
@@ -80,30 +68,42 @@ for ticker in universo:
         model.fit(train[features].iloc[:-60], train['Target'].iloc[:-60])
         
         prob = model.predict_proba(train[features].iloc[-1:]) [0][1]
-        actual = train.iloc[-1]
+        precio_actual = float(train['Close'].iloc[-1])
+        fecha_actual = train.index[-1]
         
-        # FILTRO DE COMPRA (IA > 55% y sin sobrecompra extrema)
-        if prob > 0.55 and actual['RSI'] < 70:
+        # FILTRO DE COMPRA PROYECTIVO
+        if prob > 0.52:
             encontrados += 1
-            stop = actual['Close'] - (actual['ATR'] * 4) # Stop amplio para inversión
-            target = actual['Close'] * 1.25 # Objetivo 25% de suba
+            stop = precio_actual - (float(train['ATR'].iloc[-1]) * 4)
+            objetivo_precio = precio_actual * 1.25 # Proyección +25%
+            fecha_objetivo = fecha_actual + timedelta(days=90) # Visualización a 3 meses
             
-            tipo = "🇦🇷 ARG" if ticker in argentinas else "🇺🇸 USA/INT"
-            msj = (f"🏛️ *SEÑAL ESTRUCTURAL ({tipo}): {ticker}*\n"
-                   f"Horizonte: `2 a 3 Meses`\n\n"
-                   f"💵 Entrada: *${actual['Close']:.2f}*\n"
-                   f"🛡️ Stop Sugerido: *${stop:.2f}*\n"
-                   f"🎯 Objetivo Largo: *${target:.2f}*\n\n"
-                   f"📊 Confianza Motor IA: `{prob:.1%}`\n"
-                   f"📌 Estado: `Tendencia de Fondo en Desarrollo`")
+            tipo = "🇦🇷" if ticker in argentinas else "🇺🇸"
+            msj = (f"🏛️ *PROYECCIÓN {tipo} {ticker}*\n"
+                   f"📅 Desde: `{fecha_actual.strftime('%d/%m/%Y')}`\n\n"
+                   f"💵 Precio Hoy: *${precio_actual:.2f}*\n"
+                   f"🛡️ Stop Loss: *${stop:.2f}*\n"
+                   f"🎯 Objetivo Proyectado: *${objetivo_precio:.2f}*\n\n"
+                   f"📊 Confianza IA: `{prob:.1%}`\n"
+                   f"🔮 Tendencia: `Proyección a 90 días`")
             
+            # Gráfico con línea de futuro
             fig, ax = plt.subplots(figsize=(10, 5))
             fig.patch.set_facecolor('#0a192f'); ax.set_facecolor('#0a192f')
-            ax.plot(train.index[-250:], train['Close'].iloc[-250:], color='white', label='Precio', linewidth=1.5)
-            ax.plot(train.index[-250:], train['SMA_200'].iloc[-250:], color='#FF00FF', label='SMA 200', linewidth=2)
-            ax.set_title(f"Planificación 90 días: {ticker}", color='white', fontweight='bold')
+            
+            # Dibujar el pasado (últimos 180 días)
+            df_plot = train.iloc[-180:]
+            ax.plot(df_plot.index, df_plot['Close'], color='white', label='Precio Histórico', linewidth=1.5)
+            ax.plot(df_plot.index, df_plot['SMA_200'], color='#FF00FF', label='Media 200 (Tendencia)', alpha=0.6)
+            
+            # Dibujar la PROYECCIÓN (Futuro)
+            ax.plot([fecha_actual, fecha_objetivo], [precio_actual, objetivo_precio], 
+                    color='#00ff00', linestyle='--', linewidth=2, label='Proyección IA')
+            ax.scatter([fecha_objetivo], [objetivo_precio], color='#00ff00', s=50) # Punto final
+            
+            ax.set_title(f"Análisis Estructural y Proyección: {ticker}", color='white', fontweight='bold')
             ax.tick_params(colors='white'); ax.legend(facecolor='#112240', labelcolor='white')
-            ax.grid(alpha=0.2)
+            ax.grid(alpha=0.1)
             
             enviar_telegram(msj, fig)
             plt.close(fig)
@@ -111,6 +111,6 @@ for ticker in universo:
     except: continue
 
 if encontrados == 0:
-    enviar_telegram("🛡️ *Reporte Final:* No se hallaron activos con ventaja estadística clara hoy. El sistema prioriza la preservación de capital.")
+    enviar_telegram("🛡️ *Reporte:* No se detectaron proyecciones alcistas claras para hoy lunes 16 de febrero de 2026.")
 else:
-    enviar_telegram(f"✅ *Análisis Completo:* Se detectaron {encontrados} oportunidades estructurales para tu portafolio.")
+    enviar_telegram(f"✅ *Análisis Terminado:* Se proyectaron {encontrados} activos con éxito.")

@@ -1,12 +1,12 @@
-name: Ejecucion Bots Financieros
+name: Terminal Quant Global (Master)
 
 on:
   schedule:
-    # Lunes a Viernes a las 12:00 de Argentina (15:00 UTC) - Ideal para el Sniper Intradía
+    # Lunes a Viernes a las 12:00 Arg (15:00 UTC) - Mitad de Rueda
     - cron: '0 15 * * 1-5'
-    # Lunes a Viernes a las 16:45 de Argentina (19:45 UTC) - Cierre de mercado
+    # Lunes a Viernes a las 16:45 Arg (19:45 UTC) - Cierre de Rueda
     - cron: '45 19 * * 1-5'
-  workflow_dispatch: # Activa el botón para correrlo a mano
+  workflow_dispatch: # Botón Manual
 
 jobs:
   analisis-mercado:
@@ -20,35 +20,49 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Instalar herramientas
+      - name: Instalar herramientas Quant
         run: pip install yfinance pandas scikit-learn matplotlib requests lxml
 
-      # --- ESCUADRÓN DE BOTS (CON SEGURO ANTI-FALLOS) ---
+      # ==========================================
+      # 🚀 ESCUADRÓN DE BOTS (ANTI-FALLOS ACTIVADO)
+      # ==========================================
 
-      - name: 1. Ejecutar Bot Swing (Corto Plazo)
-        continue-on-error: true
-        run: python bot_tactico_5dias.py
-
-      - name: 2. Ejecutar Bot Estructural (Largo Plazo)
-        continue-on-error: true
-        run: python bot_estructural_1mes.py
-        
-      - name: 3. Ejecutar Radar Commodities (Macro)
-        continue-on-error: true
-        run: python bot_macro_global.py
-
-      - name: 4. Ejecutar Sniper Intradía SMC (Day Trading)
+      - name: 1. Sniper Intradía (SMC)
         continue-on-error: true
         run: python bot_intradia_sniper.py
 
-      - name: 5. Ejecutar Calendario de Balances
+      - name: 2. Bot Swing (Corto Plazo 5d)
+        continue-on-error: true
+        run: python bot_tactico_5dias.py
+
+      - name: 3. Bot Estructural (Largo Plazo + Merval ARS)
+        continue-on-error: true
+        run: python bot_estructural_1mes.py
+        
+      - name: 4. Radar Commodities (Macro)
+        continue-on-error: true
+        run: python bot_macro_global.py
+
+      - name: 5. Monitor CEDEARs (Escudo CCL)
+        continue-on-error: true
+        run: python bot_cedears_ccl.py
+
+      - name: 6. Radar Bonos Soberanos (Riesgo País)
+        continue-on-error: true
+        run: python bot_bonos_soberanos.py
+
+      - name: 7. Cazador de Mega-Tendencias (ETFs)
+        continue-on-error: true
+        run: python bot_etf_megatendencias.py
+
+      - name: 8. Escáner Gemas Ocultas (Screener)
+        continue-on-error: true
+        run: python bot_gemas_ocultas.py
+
+      - name: 9. Calendario de Balances
         continue-on-error: true
         run: python bot_calendario_macro.py
 
-      - name: 6. Ejecutar Cazador de Dividendos
+      - name: 10. Cazador de Dividendos (Renta Pasiva)
         continue-on-error: true
         run: python bot_dividendos.py
-
-      - name: 7. Ejecutar Escáner de Gemas Ocultas
-        continue-on-error: true
-        run: python bot_gemas_ocultas.py

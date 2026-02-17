@@ -2,9 +2,11 @@ name: Ejecucion Bots Financieros
 
 on:
   schedule:
-    # Lunes a Viernes a las 16:45 de Argentina (19:45 UTC)
+    # Lunes a Viernes a las 12:00 de Argentina (15:00 UTC) - Ideal para el Sniper Intradía
+    - cron: '0 15 * * 1-5'
+    # Lunes a Viernes a las 16:45 de Argentina (19:45 UTC) - Cierre de mercado
     - cron: '45 19 * * 1-5'
-  workflow_dispatch: # Esto activa un botón para correrlo a mano
+  workflow_dispatch: # Activa el botón para correrlo a mano
 
 jobs:
   analisis-mercado:
@@ -21,11 +23,28 @@ jobs:
       - name: Instalar herramientas
         run: pip install yfinance pandas scikit-learn matplotlib requests lxml
 
-      - name: Ejecutar Bot Swing (Corto Plazo)
+      # --- ESCUADRÓN DE BOTS (CON SEGURO ANTI-FALLOS) ---
+
+      - name: 1. Ejecutar Bot Swing (Corto Plazo)
+        continue-on-error: true
         run: python bot_tactico_5dias.py
 
-      - name: Ejecutar Bot Macro (Largo Plazo)
+      - name: 2. Ejecutar Bot Estructural (Largo Plazo)
+        continue-on-error: true
         run: python bot_estructural_1mes.py
         
-      - name: Ejecutar Radar Commodities
+      - name: 3. Ejecutar Radar Commodities (Macro)
+        continue-on-error: true
         run: python bot_macro_global.py
+
+      - name: 4. Ejecutar Sniper Intradía (Day Trading)
+        continue-on-error: true
+        run: python bot_intradia_sniper.py
+
+      - name: 5. Ejecutar Calendario de Balances
+        continue-on-error: true
+        run: python bot_calendario_macro.py
+
+      - name: 6. Ejecutar Cazador de Dividendos
+        continue-on-error: true
+        run: python bot_dividendos.py

@@ -41,20 +41,21 @@ def cazar_dividendos():
     hoy = datetime.now()
     limite_dias = hoy + timedelta(days=30)
     oportunidades = []
-    lista_general = [] # Para guardar a las mejores pagadoras globales
+    lista_general = [] 
     
     for ticker in tickers_dividendos:
         try:
-            time.sleep(1) 
+            time.sleep(2) # Aumentamos la pausa para evitar bloqueos
             t = yf.Ticker(ticker)
             info = t.info
             
-            yield_crudo = info.get('dividendYield')
-            tasa_anual_usd = info.get('dividendRate')
+            # Intentamos extraer el yield de diferentes formas por si Yahoo cambia el formato
+            yield_crudo = info.get('dividendYield') or info.get('trailingAnnualDividendYield')
+            tasa_anual_usd = info.get('dividendRate') or info.get('trailingAnnualDividendRate')
+            precio_actual = info.get('currentPrice') or info.get('previousClose')
             ex_div_timestamp = info.get('exDividendDate')
-            precio_actual = info.get('previousClose', 0)
             
-            if yield_crudo is not None and tasa_anual_usd is not None and precio_actual > 0:
+            if yield_crudo and tasa_anual_usd and precio_actual:
                 yield_real = float(yield_crudo) * 100
                 
                 # Filtro Anti-Bugs
@@ -63,7 +64,6 @@ def cazar_dividendos():
                 
                 pago_trimestral_estimado = float(tasa_anual_usd) / 4
                 
-                # Guardamos todas las válidas para el Radar de Guardia
                 lista_general.append({
                     'ticker': ticker,
                     'yield': yield_real,
@@ -71,47 +71,51 @@ def cazar_dividendos():
                     'precio': float(precio_actual)
                 })
                 
-                # Filtramos las que tienen pago inminente
-                if ex_div_timestamp is not None:
-                    fecha_ex_div = datetime.fromtimestamp(ex_div_timestamp)
-                    if hoy <= fecha_ex_div <= limite_dias:
-                        oportunidades.append({
-                            'ticker': ticker,
-                            'yield': yield_real,
-                            'pago_usd_aprox': pago_trimestral_estimado,
-                            'fecha_limite': fecha_ex_div,
-                            'precio': float(precio_actual)
-                        })
+                if ex_div_timestamp:
+                    try:
+                        fecha_ex_div = datetime.fromtimestamp(ex_div_timestamp)
+                        if hoy <= fecha_ex_div <= limite_dias:
+                            oportunidades.append({
+                                'ticker': ticker,
+                                'yield': yield_real,
+                                'pago_usd_aprox': pago_trimestral_estimado,
+                                'fecha_limite': fecha_ex_div,
+                                'precio': float(precio_actual)
+                            })
+                    except:
+                        pass # Ignorar si la fecha no se puede convertir
         except Exception as e:
+            print(f"Error con {ticker}: {e}")
             continue
             
     return oportunidades, lista_general
 
 hoy_str = datetime.now().strftime('%d/%m/%Y')
-enviar_telegram(f"💸 *CAZADOR DE RENTA PASIVA V32.1* | {hoy_str}\n_Analizando flujos de efectivo..._")
+enviar_telegram(f"💸 *CAZADOR DE RENTA PASIVA V32.2* | {hoy_str}\n_Extracción de datos reforzada..._")
 
 oportunidades, lista_general = cazar_dividendos()
 
 if not oportunidades:
     # --- RADAR DE GUARDIA (FALLBACK) ---
-    lista_general.sort(key=lambda x: x['yield'], reverse=True)
-    top_3 = lista_general[:3]
-    
-    msj_fallback = ("✅ *SIN PAGOS INMINENTES (30 DÍAS)*\n"
-                    "Ninguna de las empresas verificadas corta cupón pronto.\n\n"
-                    "👀 *RADAR DE GUARDIA (Top 3 Mejores Pagadoras):*\n"
-                    "Mantené estas en la mira para cuando anuncien fecha:\n\n")
-    
-    for emp in top_3:
-        msj_fallback += (f"👑 *{emp['ticker']}*\n"
-                         f"• Yield Anual: `{emp['yield']:.2f}%`\n"
-                         f"• Spot Actual: `${emp['precio']:.2f}`\n"
-                         f"• Pago Estimado (1 acción): `+${emp['pago_usd_aprox']:.2f} USD` trimestral\n\n")
-    
-    enviar_telegram(msj_fallback)
+    if lista_general:
+        lista_general.sort(key=lambda x: x['yield'], reverse=True)
+        top_3 = lista_general[:3]
+        
+        msj_fallback = ("✅ *SIN PAGOS INMINENTES (30 DÍAS)*\n"
+                        "Ninguna empresa corta cupón pronto.\n\n"
+                        "👀 *RADAR DE GUARDIA (Top 3):*\n")
+        
+        for emp in top_3:
+            msj_fallback += (f"👑 *{emp['ticker']}*\n"
+                             f"• Yield Anual: `{emp['yield']:.2f}%`\n"
+                             f"• Spot Actual: `${emp['precio']:.2f}`\n"
+                             f"• Pago Estimado (1 acción): `+${emp['pago_usd_aprox']:.2f} USD` trimestral\n\n")
+        
+        enviar_telegram(msj_fallback)
+    else:
+        enviar_telegram("⚠️ *ERROR DE CONEXIÓN A YAHOO*\nNo se pudieron extraer datos de dividendos en este momento.")
 
 else:
-    # (Código normal si hay oportunidades)
     oportunidades.sort(key=lambda x: x['pago_usd_aprox'], reverse=True)
     
     for op in oportunidades:

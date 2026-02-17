@@ -37,7 +37,7 @@ jobs:
         continue-on-error: true
         run: python bot_macro_global.py
 
-      - name: 4. Ejecutar Sniper Intradía (Day Trading)
+      - name: 4. Ejecutar Sniper Intradía SMC (Day Trading)
         continue-on-error: true
         run: python bot_intradia_sniper.py
 
@@ -48,3 +48,7 @@ jobs:
       - name: 6. Ejecutar Cazador de Dividendos
         continue-on-error: true
         run: python bot_dividendos.py
+
+      - name: 7. Ejecutar Escáner de Gemas Ocultas
+        continue-on-error: true
+        run: python bot_gemas_ocultas.py

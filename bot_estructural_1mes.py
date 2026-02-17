@@ -42,6 +42,7 @@ mercados = {
 }
 
 def motor_institucional(ticker):
+    df = pd.DataFrame()
     for intento in range(3):
         try:
             t = yf.Ticker(ticker)
@@ -79,9 +80,9 @@ def motor_institucional(ticker):
     model.fit(train[features].iloc[:-dias_proy], train['Target'].iloc[:-dias_proy])
     
     pred_ia_cruda = model.predict(df[features].iloc[-1:])[0]
-    precio_act = df['Close'].iloc[-1]
+    precio_act = float(df['Close'].iloc[-1])
     
-    limite_movimiento = df['ATR'].iloc[-1] * 40
+    limite_movimiento = float(df['ATR'].iloc[-1]) * 40
     if pred_ia_cruda > precio_act + limite_movimiento: pred_ia = precio_act + limite_movimiento
     elif pred_ia_cruda < precio_act - limite_movimiento: pred_ia = precio_act - limite_movimiento
     else: pred_ia = pred_ia_cruda
@@ -93,10 +94,10 @@ def motor_institucional(ticker):
     except:
         rec, pe = "N/A", "N/A"
 
-    return df, {'pred': pred_ia, 'rec': rec, 'pe': pe, 'precio': precio_act, 'std': df['STD'].iloc[-1]}
+    return df, {'pred': float(pred_ia), 'rec': rec, 'pe': pe, 'precio': precio_act, 'std': float(df['STD'].iloc[-1])}
 
 hoy_str = datetime.now().strftime('%d/%m/%Y')
-enviar_telegram(f"🏛️ *TERMINAL INSTITUCIONAL V27.1*\nIniciando Escaneo Avanzado | {hoy_str}\n_Corrección de sintaxis aplicada..._")
+enviar_telegram(f"🏛️ *TERMINAL INSTITUCIONAL V27.2*\nIniciando Escaneo Avanzado | {hoy_str}\n_Compatibilidad con Python 3.10 asegurada..._")
 
 for region, activos in mercados.items():
     bandera = region.split()[0]
@@ -112,12 +113,17 @@ for region, activos in mercados.items():
             emoji = "🟢" if diff > 0 else "🔴"
             
             # --- SOLUCIÓN DEL ERROR AQUÍ ---
-            pe_formateado = data['pe'] if isinstance(data['pe'], str) else f"{data['pe']:.1f}"
+            # Separamos el formateo para que Python 3.10 no se rompa
+            pe_val = data['pe']
+            if isinstance(pe_val, str):
+                pe_str = pe_val
+            else:
+                pe_str = f"{pe_val:.1f}"
             
             msj = (f"{bandera} *{ticker}* | `{data['rec']}`\n"
-                   f"💰 Spot: *${p:.2f}* | P/E: `{pe_formateado}`\n"
+                   f"💰 Spot: *${p:.2f}* | P/E: `{pe_str}`\n"
                    f"🧠 IA Target Q2: *${data['pred']:.2f}* ({diff:+.2f}% {emoji})\n"
-                   f"📊 RSI: `{df['RSI'].iloc[-1]:.1f}` | MACD: `{df['MACD'].iloc[-1]:.2f}`")
+                   f"📊 RSI: `{float(df['RSI'].iloc[-1]):.1f}` | MACD: `{float(df['MACD'].iloc[-1]):.2f}`")
 
             # GRÁFICO INSTITUCIONAL
             plt.style.use('dark_background')

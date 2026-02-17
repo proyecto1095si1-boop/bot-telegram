@@ -48,22 +48,34 @@ def cazar_dividendos():
             t = yf.Ticker(ticker)
             info = t.info
             
-            # Extraer porcentaje de rendimiento anual
-            yield_val = info.get('dividendYield', None)
-            # Extraer fecha límite para comprar
-            ex_div_timestamp = info.get('exDividendDate', None)
+            # Extraer datos crudos de Yahoo
+            yield_crudo = info.get('dividendYield')
+            tasa_anual_usd = info.get('dividendRate') # Cuántos USD paga al año por acción
+            ex_div_timestamp = info.get('exDividendDate')
+            precio_actual = info.get('previousClose', 0)
             
-            if yield_val is not None and ex_div_timestamp is not None:
-                # Convertir timestamp a fecha legible
+            if yield_crudo is not None and ex_div_timestamp is not None and tasa_anual_usd is not None and precio_actual > 0:
+                # Convertir a porcentaje
+                yield_real = float(yield_crudo) * 100
+                
+                # --- FILTRO ANTI-BUGS DE YAHOO ---
+                # Si Yahoo reporta una locura (>15%) o si la acción es gigante (ej. MSFT) y reporta >5%, lo ignoramos.
+                if yield_real > 15.0 or (ticker in ['MSFT', 'AAPL'] and yield_real > 3.0):
+                    continue 
+                
                 fecha_ex_div = datetime.fromtimestamp(ex_div_timestamp)
                 
-                # Solo nos interesan las que pagan pronto (próximos 30 días)
+                # Solo si la fecha límite de compra está en los próximos 30 días
                 if hoy <= fecha_ex_div <= limite_dias:
+                    # Las empresas en USA suelen pagar dividendos de forma trimestral (4 veces al año)
+                    pago_trimestral_estimado = float(tasa_anual_usd) / 4
+                    
                     oportunidades.append({
                         'ticker': ticker,
-                        'yield': float(yield_val) * 100, # Convertir a porcentaje
+                        'yield': yield_real,
+                        'pago_usd_aprox': pago_trimestral_estimado,
                         'fecha_limite': fecha_ex_div,
-                        'precio': float(info.get('previousClose', 0))
+                        'precio': float(precio_actual)
                     })
         except Exception as e:
             print(f"Error analizando {ticker}: {e}")
@@ -72,49 +84,51 @@ def cazar_dividendos():
     return oportunidades
 
 hoy_str = datetime.now().strftime('%d/%m/%Y')
-enviar_telegram(f"💸 *CAZADOR DE DIVIDENDOS ACTIVADO* | {hoy_str}\n_Buscando rentas pasivas para los próximos 30 días..._")
+enviar_telegram(f"💸 *CAZADOR DE RENTA PASIVA V32.0* | {hoy_str}\n_Analizando flujos de efectivo reales..._")
 
 oportunidades = cazar_dividendos()
 
 if not oportunidades:
-    enviar_telegram("✅ *SIN ALERTAS DE RENTA*\nNinguna de las empresas principales corta cupón en los próximos 30 días.")
+    enviar_telegram("✅ *SIN ALERTAS DE RENTA*\nNinguna de las empresas verificadas corta cupón en los próximos 30 días.")
 else:
-    # Ordenar por el dividendo más alto
-    oportunidades.sort(key=lambda x: x['yield'], reverse=True)
+    # Ordenar por el pago en dólares más alto (para el simulador)
+    oportunidades.sort(key=lambda x: x['pago_usd_aprox'], reverse=True)
     
     for op in oportunidades:
         tck = op['ticker']
         yield_pct = op['yield']
         fecha_obj = op['fecha_limite']
         precio = op['precio']
+        pago_usd = op['pago_usd_aprox']
         
         dias_faltantes = (fecha_obj - datetime.now()).days
         fecha_txt = fecha_obj.strftime('%d de %b, %Y')
-        yield_txt = f"{yield_pct:.2f}%"
-        precio_txt = f"${precio:.2f}"
         
         mensaje = (f"💰 *ALERTA DE PAGO: {tck}*\n"
-                   f"Rendimiento Anualizado: `{yield_txt}`\n"
-                   f"⏳ Límite para comprar: *{dias_faltantes} días* (`{fecha_txt}`)\n"
-                   f"Spot Actual: `{precio_txt}`\n\n"
-                   f"_Nota: Debes tener la acción comprada ANTES de la fecha límite para cobrar._")
+                   f"Rendimiento Anual: `{yield_pct:.2f}%`\n"
+                   f"Spot Actual: `${precio:.2f}`\n"
+                   f"⏳ Límite para comprar: *{dias_faltantes} días* (`{fecha_txt}`)\n\n"
+                   f"💡 *SIMULADOR DE RENTA:*\n"
+                   f"Si compras **1 acción** hoy a `${precio:.2f}` (y la mantienes hasta la fecha límite),\n"
+                   f"cobrarías aproximadamente **${pago_usd:.2f} USD** en efectivo en el próximo pago trimestral.")
 
-        # --- TARJETA DE RENTA PASIVA (DORADA) ---
+        # --- TARJETA VISUAL (REFINADA) ---
         plt.style.use('dark_background')
-        fig, ax = plt.subplots(figsize=(6, 3))
+        fig, ax = plt.subplots(figsize=(7, 3.5))
         fig.patch.set_facecolor('#0b0f19')
         ax.set_facecolor('#0b0f19')
         
         ax.axis('off')
         
         # Textos de la tarjeta
-        ax.text(0.05, 0.75, f"CUPÓN DE PAGO: {tck}", color='#eab308', fontsize=18, fontweight='bold', ha='left') # Dorado
-        ax.text(0.05, 0.50, f"Rendimiento (Yield): {yield_txt} Anual", color='#4ade80', fontsize=14, fontweight='bold', ha='left')
-        ax.text(0.05, 0.25, f"Comprar antes del: {fecha_txt}", color='white', fontsize=12, ha='left')
-        ax.text(0.05, 0.05, f"Precio de la acción: {precio_txt}", color='#94a3b8', fontsize=10, ha='left')
+        ax.text(0.05, 0.80, f"CUPÓN DE PAGO: {tck}", color='#eab308', fontsize=18, fontweight='bold', ha='left') 
+        ax.text(0.05, 0.55, f"Yield Anual: {yield_pct:.2f}%", color='#4ade80', fontsize=14, fontweight='bold', ha='left')
+        ax.text(0.05, 0.35, f"Comprar antes del: {fecha_txt} (En {dias_faltantes} días)", color='white', fontsize=12, ha='left')
         
-        # Borde decorativo dorado
-        rect = plt.Rectangle((0, 0), 1, 1, fill=False, color='#eab308', linewidth=4, transform=ax.transAxes)
+        # Destacar el simulador en la tarjeta
+        ax.text(0.05, 0.10, f"Estimado por 1 acción: +${pago_usd:.2f} USD", color='#22d3ee', fontsize=13, fontweight='bold', ha='left')
+        
+        rect = plt.Rectangle((0, 0), 1, 1, fill=False, color='#eab308', linewidth=3, transform=ax.transAxes)
         ax.add_patch(rect)
         
         enviar_telegram(mensaje, fig)

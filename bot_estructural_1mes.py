@@ -1,11 +1,15 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.ensemble import HistGradientBoostingRegressor # Modelo más rápido y preciso para GitHub
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 import requests
 import io
 import warnings
+import time
+import random
+import gc
 from datetime import datetime, timedelta
 
 warnings.filterwarnings('ignore')
@@ -20,95 +24,159 @@ def enviar_telegram(mensaje, fig=None):
         requests.post(url_texto, data={'chat_id': CHAT_ID, 'text': mensaje, 'parse_mode': 'Markdown'})
         if fig is not None:
             buf = io.BytesIO()
-            fig.savefig(buf, format='png', bbox_inches='tight', dpi=140, facecolor='#020617')
+            fig.savefig(buf, format='png', bbox_inches='tight', dpi=130, facecolor='#0b0f19')
             buf.seek(0)
             url_foto = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
             requests.post(url_foto, data={'chat_id': CHAT_ID}, files={'photo': buf})
             buf.close()
-            plt.close(fig) # Liberar memoria crucial
-    except: pass
+            plt.close('all') # Cierra todas las figuras
+            gc.collect()     # Fuerza a vaciar la memoria RAM
+    except Exception as e:
+        print(f"Error Telegram: {e}")
 
-# --- UNIVERSO MAESTRO 45 (Sincronizado 2026) ---
+# --- UNIVERSO MAESTRO 45 ---
 mercados = {
     '🇦🇷 ARG': ['YPF', 'GGAL', 'BMA', 'PAM', 'VIST', 'TGS', 'CEPU', 'ALUA.BA', 'TXAR.BA', 'EDN', 'LOMA', 'BBAR', 'SUPV', 'CRESY', 'TGNO4.BA'],
     '🇺🇸 USA': ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'JPM', 'V', 'XOM', 'WMT', 'LLY', 'AVGO', 'PYPL', 'MELI'],
     '🇬🇧 UK': ['SHEL.L', 'BP.L', 'HSBA.L', 'AZN.L', 'GSK.L', 'ULVR.L', 'RIO.L', 'BARC.L', 'VOD.L', 'REL.L', 'RR.L', 'LLOY.L', 'AAL.L', 'DGE.L', 'BA.L']
 }
 
-def motor_insight_pro(ticker):
-    t = yf.Ticker(ticker)
-    df = t.history(period="3y", interval="1d")
-    if df.empty or len(df) < 150: return None
+def motor_institucional(ticker):
+    # Descarga Robusta
+    for intento in range(3):
+        try:
+            t = yf.Ticker(ticker)
+            df = t.history(period="3y", interval="1d", timeout=10)
+            if not df.empty and len(df) > 200: break
+        except: time.sleep(2)
     
-    # --- ANÁLISIS TÉCNICO ---
+    if df.empty or len(df) < 200: return None
+    
+    # --- INDICADORES QUANT AVANZADOS ---
     df['SMA_50'] = df['Close'].rolling(50).mean()
     df['SMA_200'] = df['Close'].rolling(200).mean()
+    
+    # RSI
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    df['RSI'] = 100 - (100 / (1 + (gain/loss)))
+    
+    # MACD
+    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
+    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = ema12 - ema26
+    
+    # Bandas de Bollinger y ATR (Para el filtro de realismo)
+    df['STD'] = df['Close'].rolling(20).std()
+    df['BB_Upper'] = df['SMA_50'] + (df['STD'] * 2)
+    df['BB_Lower'] = df['SMA_50'] - (df['STD'] * 2)
     df['Volatilidad'] = df['Close'].pct_change().rolling(20).std()
+    df['ATR'] = df['High'] - df['Low'] # Simplificado
+    df['ATR'] = df['ATR'].rolling(14).mean()
     
-    # --- IA PROYECTIVA (GRADIENT BOOSTING) ---
-    df['Target'] = df['Close'].shift(-60)
+    # --- IA: HIST GRADIENT BOOSTING ---
+    dias_proy = 60
+    df['Target'] = df['Close'].shift(-dias_proy)
     train = df.dropna()
-    # Entrenamos con precio, volatilidad y volumen para mayor realismo
-    features = ['Close', 'Volatilidad', 'Volume']
-    model = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=4)
-    model.fit(train[features].iloc[:-60], train['Target'].iloc[:-60])
+    features = ['Close', 'RSI', 'MACD', 'Volatilidad']
     
-    pred_ia = model.predict(df[features].iloc[-1:])[0]
+    model = HistGradientBoostingRegressor(max_iter=150, learning_rate=0.05, max_depth=5, random_state=42)
+    model.fit(train[features].iloc[:-dias_proy], train['Target'].iloc[:-dias_proy])
     
-    # --- FUNDAMENTOS Y NOTICIAS ---
-    info = t.info
-    fundamental = {
-        'pe': info.get('forwardPE', 'N/A'),
-        'target_analista': info.get('targetMeanPrice', 'N/A'),
-        'recomendacion': info.get('recommendationKey', 'N/A').upper()
-    }
+    pred_ia_cruda = model.predict(df[features].iloc[-1:])[0]
+    precio_act = df['Close'].iloc[-1]
     
-    news = t.news[:3]
-    resumen = " | ".join([n['title'] for n in news]) if news else "Sin noticias hoy."
+    # Filtro de Realismo: La acción no debería moverse más de 40 veces su ATR promedio en 60 días
+    limite_movimiento = df['ATR'].iloc[-1] * 40
+    if pred_ia_cruda > precio_act + limite_movimiento: pred_ia = precio_act + limite_movimiento
+    elif pred_ia_cruda < precio_act - limite_movimiento: pred_ia = precio_act - limite_movimiento
+    else: pred_ia = pred_ia_cruda
     
-    return df, {'pred': pred_ia, 'fund': fundamental, 'news': resumen, 'precio': df['Close'].iloc[-1]}
+    # Fundamentos (Manejo de errores si Yahoo no tiene datos)
+    try:
+        info = t.info
+        rec = str(info.get('recommendationKey', 'HOLD')).upper()
+        pe = info.get('forwardPE', 'N/A')
+    except:
+        rec, pe = "N/A", "N/A"
 
-enviar_telegram("🏛️ *TERMINAL QUANT GLOBAL V25.0*\nAuditando 45 activos: Argentina • USA • Londres\n_Fecha: Lunes 16 de Febrero, 2026_")
+    return df, {'pred': pred_ia, 'rec': rec, 'pe': pe, 'precio': precio_act, 'std': df['STD'].iloc[-1]}
+
+hoy_str = datetime.now().strftime('%d/%m/%Y')
+enviar_telegram(f"🏛️ *TERMINAL INSTITUCIONAL V27.0*\nIniciando Escaneo Avanzado | {hoy_str}\n_Cargando Modelos Multidimensionales..._")
 
 for region, activos in mercados.items():
     bandera = region.split()[0]
     for ticker in activos:
         try:
-            res = motor_insight_pro(ticker)
+            time.sleep(random.uniform(1.5, 3.5)) # Anti-bloqueo
+            res = motor_institucional(ticker)
             if not res: continue
             df, data = res
             
             p = data['precio']
             diff = ((data['pred'] / p) - 1) * 100
-            emoji = "🚀" if diff > 0 else "⚠️"
+            emoji = "🟢" if diff > 0 else "🔴"
             
-            msj = (f"{bandera} *{ticker}* | `{data['fund']['recomendacion']}`\n"
-                   f"💰 Precio: *${p:.2f}* | P/E: `{data['fund']['pe']}`\n"
-                   f"🧠 IA 60d: *${data['pred']:.2f}* ({diff:+.1f}% {emoji})\n"
-                   f"🎯 Target Analistas: `${data['fund']['target_analista']}`\n"
-                   f"📰 *Noticias:* _{data['news']}_")
+            msj = (f"{bandera} *{ticker}* | `{data['rec']}`\n"
+                   f"💰 Spot: *${p:.2f}* | P/E: `{data['pe'] if isinstance(data['pe'], str) else f'{data['pe']:.1f}'}`\n"
+                   f"🧠 IA Target Q2: *${data['pred']:.2f}* ({diff:+.2f}% {emoji})\n"
+                   f"📊 RSI: `{df['RSI'].iloc[-1]:.1f}` | MACD: `{df['MACD'].iloc[-1]:.2f}`")
 
-            # --- GRÁFICO PROFESIONAL ---
+            # --- GRÁFICO INSTITUCIONAL (DOBLE PANEL) ---
             plt.style.use('dark_background')
-            fig, ax = plt.subplots(figsize=(11, 5))
-            fig.patch.set_facecolor('#020617'); ax.set_facecolor('#020617')
+            fig = plt.figure(figsize=(11, 7))
+            fig.patch.set_facecolor('#0b0f19')
             
-            # Histórico
-            df_plot = df.iloc[-180:]
-            ax.plot(df_plot.index, df_plot['Close'], color='#38bdf8', linewidth=2, label='Precio')
-            ax.plot(df_plot.index, df_plot['SMA_200'], color='#f472b6', alpha=0.5, label='Media 200d')
+            # Crear layout: 70% Precio arriba, 30% RSI abajo
+            gs = gridspec.GridSpec(2, 1, height_ratios=[3, 1], hspace=0.1)
             
-            # Proyección IA
+            # Panel Superior: Precio y Proyección
+            ax1 = fig.add_subplot(gs[0])
+            ax1.set_facecolor('#0b0f19')
+            df_plot = df.iloc[-150:]
+            
+            # Velas simuladas (Línea principal + Relleno de Bollinger)
+            ax1.plot(df_plot.index, df_plot['Close'], color='#22d3ee', linewidth=2, label='Cotización')
+            ax1.fill_between(df_plot.index, df_plot['BB_Lower'], df_plot['BB_Upper'], color='#38bdf8', alpha=0.05, label='Canal Volatilidad')
+            ax1.plot(df_plot.index, df_plot['SMA_200'], color='#f472b6', linestyle='--', alpha=0.6, label='SMA 200 (Tendencia)')
+            
+            # Dibujo de la Proyección y Cono
             fecha_futura = df.index[-1] + timedelta(days=60)
-            ax.plot([df.index[-1], fecha_futura], [p, data['pred']], color='#4ade80', linestyle='--', marker='o', label='IA')
+            ax1.plot([df.index[-1], fecha_futura], [p, data['pred']], color='#4ade80', linestyle='--', linewidth=2.5, marker='o', markersize=6, label='Ruta IA')
             
-            ax.set_title(f"{bandera} {ticker} - Proyección Abril 2026", color='white', loc='left')
-            ax.grid(alpha=0.05); ax.legend(fontsize='small')
+            # Cono de error basado en Desviación Estándar
+            margen_error = data['std'] * 1.5
+            ax1.fill_between([df.index[-1], fecha_futura], [p, data['pred'] + margen_error], [p, data['pred'] - margen_error], color='#4ade80', alpha=0.15)
+            
+            ax1.set_title(f"Quantum Analysis: {ticker} (Proyección a 60 días)", color='white', loc='left', fontsize=12, fontweight='bold')
+            ax1.legend(loc='upper left', fontsize='small', framealpha=0.2)
+            ax1.grid(color='#1e293b', alpha=0.4, linestyle=':')
+            ax1.tick_params(labelbottom=False) # Ocultar fechas en el panel de arriba
+            
+            # Panel Inferior: RSI Oscilador
+            ax2 = fig.add_subplot(gs[1])
+            ax2.set_facecolor('#0b0f19')
+            ax2.plot(df_plot.index, df_plot['RSI'], color='#c084fc', linewidth=1.5)
+            ax2.axhline(70, color='#ef4444', linestyle='--', alpha=0.5) # Sobrecompra
+            ax2.axhline(30, color='#22c55e', linestyle='--', alpha=0.5) # Sobreventa
+            ax2.fill_between(df_plot.index, df_plot['RSI'], 70, where=(df_plot['RSI'] >= 70), color='#ef4444', alpha=0.3)
+            ax2.fill_between(df_plot.index, df_plot['RSI'], 30, where=(df_plot['RSI'] <= 30), color='#22c55e', alpha=0.3)
+            
+            ax2.set_ylabel('RSI (14)', color='gray', fontsize=9)
+            ax2.grid(color='#1e293b', alpha=0.4, linestyle=':')
+            ax2.tick_params(axis='x', rotation=45, colors='gray')
+            ax2.tick_params(axis='y', colors='gray')
+            
+            # Ajustes finales
+            ax1.spines['top'].set_visible(False); ax1.spines['right'].set_visible(False)
+            ax2.spines['top'].set_visible(False); ax2.spines['right'].set_visible(False)
             
             enviar_telegram(msj, fig)
             
         except Exception as e:
-            print(f"Error en {ticker}: {e}")
+            print(f"Fallo en {ticker}: {e}")
             continue
 
-enviar_telegram("✅ *TERMINAL 2026: ANÁLISIS GLOBAL COMPLETADO*")
+enviar_telegram("✅ *AUDITORÍA INSTITUCIONAL 2026 FINALIZADA*")

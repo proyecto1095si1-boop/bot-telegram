@@ -42,7 +42,7 @@ mercados = {
     '🇬🇧 UK': ['SHEL.L', 'BP.L', 'HSBA.L', 'AZN.L', 'GSK.L', 'ULVR.L', 'RIO.L', 'BARC.L', 'VOD.L', 'REL.L', 'RR.L', 'LLOY.L', 'AAL.L', 'DGE.L', 'BA.L']
 }
 
-def motor_fibonacci_ia(ticker):
+def motor_black_swan(ticker):
     df = pd.DataFrame()
     for intento in range(3):
         try:
@@ -53,7 +53,7 @@ def motor_fibonacci_ia(ticker):
     
     if df.empty or len(df) < 200: return None
     
-    # Indicadores
+    # --- INDICADORES BÁSICOS ---
     df['SMA_50'] = df['Close'].rolling(50).mean()
     df['SMA_200'] = df['Close'].rolling(200).mean()
     
@@ -70,18 +70,26 @@ def motor_fibonacci_ia(ticker):
     df['BB_Upper'] = df['SMA_50'] + (df['STD'] * 2)
     df['BB_Lower'] = df['SMA_50'] - (df['STD'] * 2)
     
-    # --- IA V30: PREDICCIÓN DE RETORNOS (Soluciona el sesgo pesimista argentino) ---
+    # --- DETECCIÓN DE CISNES NEGROS (Anomalías de Volumen) ---
+    df['Vol_Mean'] = df['Volume'].rolling(20).mean()
+    df['Vol_Std'] = df['Volume'].rolling(20).std()
+    # Z-Score: a cuántas desviaciones estándar está el volumen de hoy comparado con lo normal
+    df['Vol_Z'] = (df['Volume'] - df['Vol_Mean']) / df['Vol_Std']
+    # Si el Z-Score es mayor a 3.0, es un volumen inusualmente extremo (Cisne Negro)
+    df['Cisne_Negro'] = np.where(df['Vol_Z'] > 3.0, df['Close'], np.nan)
+    
+    cisne_reciente = df['Vol_Z'].iloc[-3:].max() > 3.0 # Revisa si hubo anomalía en los últimos 3 días
+    
+    # --- IA: PREDICCIÓN DE RETORNOS (Ridge Regression) ---
     dias_proy = 60
-    # En lugar de precio, predecimos el % de ganancia/pérdida a 60 días
     df['Target_Ret'] = (df['Close'].shift(-dias_proy) / df['Close']) - 1.0
-    train = df.dropna()
+    train = df.dropna(subset=['Close', 'SMA_50', 'SMA_200', 'RSI', 'MACD', 'Target_Ret'])
     
     features = ['Close', 'SMA_50', 'SMA_200', 'RSI', 'MACD']
     scaler = StandardScaler()
     X_train = scaler.fit_transform(train[features].iloc[:-dias_proy])
     y_train = train['Target_Ret'].iloc[:-dias_proy]
     
-    # Alpha más bajo para que sea más sensible a los rebotes
     model = Ridge(alpha=0.5) 
     model.fit(X_train, y_train)
     
@@ -89,10 +97,8 @@ def motor_fibonacci_ia(ticker):
     pred_retorno = model.predict(X_ultima)[0]
     precio_act = float(df['Close'].iloc[-1])
     
-    # Convertimos el retorno predicho de vuelta a precio real
     pred_ia_cruda = precio_act * (1 + pred_retorno)
     
-    # Filtro Anti-Catástrofe de Mercados Emergentes
     soporte_200 = float(df['SMA_200'].iloc[-1])
     if pred_ia_cruda < precio_act and precio_act > soporte_200:
         pred_ia = max(pred_ia_cruda, soporte_200 * 0.95)
@@ -107,17 +113,17 @@ def motor_fibonacci_ia(ticker):
         rec = "N/A"
         pe_ratio = "N/A"
 
-    return df, {'pred': float(pred_ia), 'rec': rec, 'pe': pe_ratio, 'precio': precio_act, 'std': float(df['STD'].iloc[-1])}
+    return df, {'pred': float(pred_ia), 'rec': rec, 'pe': pe_ratio, 'precio': precio_act, 'std': float(df['STD'].iloc[-1]), 'anomalia': cisne_reciente}
 
 hoy_str = datetime.now().strftime('%d/%m/%Y')
-enviar_telegram(f"✨ *TERMINAL FIBONACCI V30.0*\nAuditando con Motor de Retornos Logarítmicos | {hoy_str}\n_Sesgo pesimista corregido..._")
+enviar_telegram(f"🦢 *TERMINAL BLACK SWAN V31.0*\nAuditando Anomalías y Zonas Fibonacci | {hoy_str}\n_Radares de volumen institucional activados..._")
 
 for region, activos in mercados.items():
     bandera = region.split()[0]
     for ticker in activos:
         try:
             time.sleep(random.uniform(1.5, 3.5)) 
-            res = motor_fibonacci_ia(ticker)
+            res = motor_black_swan(ticker)
             if not res: continue
             df, data = res
             
@@ -132,12 +138,15 @@ for region, activos in mercados.items():
             valor_rsi = float(df['RSI'].iloc[-1])
             rsi_formateado = str(round(valor_rsi, 1))
             
+            # Alerta visual en el mensaje si hay Cisne Negro
+            alerta_cisne = "\n🚨 *ALERTA:* Volumen anómalo detectado (Smart Money)." if data['anomalia'] else ""
+            
             msj = (f"{bandera} *{ticker}* | `{data['rec']}`\n"
                    f"💰 Spot: *${p:.2f}* | P/E: `{pe_formateado}`\n"
                    f"🧠 IA Target Q2: *${data['pred']:.2f}* ({diff:+.2f}% {emoji})\n"
-                   f"📊 RSI: `{rsi_formateado}` | Riesgo: `±{data['std']:.2f}`")
+                   f"📊 RSI: `{rsi_formateado}` | Riesgo: `±{data['std']:.2f}`{alerta_cisne}")
 
-            # GRÁFICO CON FIBONACCI
+            # GRÁFICO CON FIBONACCI Y CISNES NEGROS
             plt.style.use('dark_background')
             fig = plt.figure(figsize=(11, 7))
             fig.patch.set_facecolor('#0b0f19')
@@ -151,7 +160,11 @@ for region, activos in mercados.items():
             ax1.fill_between(df_plot.index, df_plot['BB_Lower'], df_plot['BB_Upper'], color='#38bdf8', alpha=0.05)
             ax1.plot(df_plot.index, df_plot['SMA_200'], color='#f472b6', linestyle='--', alpha=0.6, label='SMA 200 (Tendencia)')
             
-            # --- DIBUJAR FIBONACCI (Nivel Dios) ---
+            # Dibujar estrellas donde hubo anomalías de volumen
+            if not df_plot['Cisne_Negro'].dropna().empty:
+                ax1.scatter(df_plot.index, df_plot['Cisne_Negro'], color='#d946ef', s=150, marker='*', zorder=5, label='Anomalía Institucional')
+            
+            # --- FIBONACCI ---
             max_price = df_plot['Close'].max()
             min_price = df_plot['Close'].min()
             diferencia = max_price - min_price
@@ -161,6 +174,7 @@ for region, activos in mercados.items():
             ax1.axhline(fib_618, color='#eab308', linestyle=':', alpha=0.7, label='Fib 61.8% (Soporte Fuerte)')
             ax1.axhline(fib_382, color='#fb923c', linestyle=':', alpha=0.5, label='Fib 38.2%')
             
+            # --- PROYECCIÓN ---
             fecha_futura = df.index[-1] + timedelta(days=60)
             ax1.plot([df.index[-1], fecha_futura], [p, data['pred']], color='#4ade80' if diff > 0 else '#ef4444', linestyle='--', linewidth=2.5, marker='o', markersize=6, label='Ruta IA')
             
@@ -168,11 +182,12 @@ for region, activos in mercados.items():
             color_cono = '#4ade80' if diff > 0 else '#ef4444'
             ax1.fill_between([df.index[-1], fecha_futura], [p, data['pred'] + margen_error], [p, data['pred'] - margen_error], color=color_cono, alpha=0.15)
             
-            ax1.set_title(f"Terminal V30: {ticker} | Zonas Fibonacci", color='white', loc='left', fontsize=12, fontweight='bold')
+            ax1.set_title(f"Terminal V31 (Black Swan): {ticker} | Zonas Fibonacci", color='white', loc='left', fontsize=12, fontweight='bold')
             ax1.legend(loc='upper left', fontsize='small', framealpha=0.2)
             ax1.grid(color='#1e293b', alpha=0.4, linestyle=':')
             ax1.tick_params(labelbottom=False) 
             
+            # --- PANEL RSI ---
             ax2 = fig.add_subplot(gs[1])
             ax2.set_facecolor('#0b0f19')
             ax2.plot(df_plot.index, df_plot['RSI'], color='#c084fc', linewidth=1.5)
@@ -195,4 +210,4 @@ for region, activos in mercados.items():
             print(f"Fallo en {ticker}: {e}")
             continue
 
-enviar_telegram("✅ *AUDITORÍA FIBONACCI 2026 FINALIZADA*")
+enviar_telegram("✅ *AUDITORÍA BLACK SWAN 2026 FINALIZADA*")

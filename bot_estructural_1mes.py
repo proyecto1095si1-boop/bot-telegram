@@ -35,14 +35,15 @@ def enviar_telegram(mensaje, fig=None):
     except Exception as e:
         print(f"Error Telegram: {e}")
 
-# --- UNIVERSO MAESTRO 45 ---
+# --- UNIVERSO MAESTRO LOCAL ---
+# Ahora la sección Argentina mira EXCLUSIVAMENTE la Bolsa de Buenos Aires en PESOS (.BA)
 mercados = {
-    '🇦🇷 ARG': ['YPF', 'GGAL', 'BMA', 'PAM', 'VIST', 'TGS', 'CEPU', 'ALUA.BA', 'TXAR.BA', 'EDN', 'LOMA', 'BBAR', 'SUPV', 'CRESY', 'TGNO4.BA'],
-    '🇺🇸 USA': ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'JPM', 'V', 'XOM', 'WMT', 'LLY', 'AVGO', 'PYPL', 'MELI'],
-    '🇬🇧 UK': ['SHEL.L', 'BP.L', 'HSBA.L', 'AZN.L', 'GSK.L', 'ULVR.L', 'RIO.L', 'BARC.L', 'VOD.L', 'REL.L', 'RR.L', 'LLOY.L', 'AAL.L', 'DGE.L', 'BA.L']
+    '🇦🇷 MERVAL (ARS)': ['YPFD.BA', 'GGAL.BA', 'BMA.BA', 'PAMP.BA', 'CEPU.BA', 'TGSU2.BA', 'ALUA.BA', 'TXAR.BA', 'EDN.BA', 'LOMA.BA', 'BBAR.BA', 'SUPV.BA', 'CRES.BA', 'TGNO4.BA', 'COME.BA'],
+    '🇺🇸 USA (USD)': ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'JPM', 'V', 'XOM', 'WMT', 'LLY', 'AVGO', 'PYPL', 'MELI'],
+    '🇬🇧 UK (GBP)': ['SHEL.L', 'BP.L', 'HSBA.L', 'AZN.L', 'GSK.L', 'ULVR.L', 'RIO.L', 'BARC.L', 'VOD.L', 'REL.L', 'RR.L', 'LLOY.L', 'AAL.L', 'DGE.L', 'BA.L']
 }
 
-def motor_black_swan(ticker):
+def motor_fibonacci_ia(ticker):
     df = pd.DataFrame()
     for intento in range(3):
         try:
@@ -53,7 +54,7 @@ def motor_black_swan(ticker):
     
     if df.empty or len(df) < 200: return None
     
-    # --- INDICADORES BÁSICOS ---
+    # Indicadores
     df['SMA_50'] = df['Close'].rolling(50).mean()
     df['SMA_200'] = df['Close'].rolling(200).mean()
     
@@ -70,23 +71,18 @@ def motor_black_swan(ticker):
     df['BB_Upper'] = df['SMA_50'] + (df['STD'] * 2)
     df['BB_Lower'] = df['SMA_50'] - (df['STD'] * 2)
     
-    # --- DETECCIÓN DE CISNES NEGROS (Anomalías de Volumen) ---
-    df['Vol_Mean'] = df['Volume'].rolling(20).mean()
-    df['Vol_Std'] = df['Volume'].rolling(20).std()
-    # Z-Score: a cuántas desviaciones estándar está el volumen de hoy comparado con lo normal
-    df['Vol_Z'] = (df['Volume'] - df['Vol_Mean']) / df['Vol_Std']
-    # Si el Z-Score es mayor a 3.0, es un volumen inusualmente extremo (Cisne Negro)
-    df['Cisne_Negro'] = np.where(df['Vol_Z'] > 3.0, df['Close'], np.nan)
-    
-    cisne_reciente = df['Vol_Z'].iloc[-3:].max() > 3.0 # Revisa si hubo anomalía en los últimos 3 días
-    
-    # --- IA: PREDICCIÓN DE RETORNOS (Ridge Regression) ---
+    # --- IA: PREDICCIÓN DE RETORNOS ---
     dias_proy = 60
     df['Target_Ret'] = (df['Close'].shift(-dias_proy) / df['Close']) - 1.0
-    train = df.dropna(subset=['Close', 'SMA_50', 'SMA_200', 'RSI', 'MACD', 'Target_Ret'])
+    train = df.dropna()
     
     features = ['Close', 'SMA_50', 'SMA_200', 'RSI', 'MACD']
     scaler = StandardScaler()
+    
+    # Si por algún motivo no hay suficientes datos limpios, ignoramos
+    if len(train) <= dias_proy:
+        return None
+        
     X_train = scaler.fit_transform(train[features].iloc[:-dias_proy])
     y_train = train['Target_Ret'].iloc[:-dias_proy]
     
@@ -113,17 +109,21 @@ def motor_black_swan(ticker):
         rec = "N/A"
         pe_ratio = "N/A"
 
-    return df, {'pred': float(pred_ia), 'rec': rec, 'pe': pe_ratio, 'precio': precio_act, 'std': float(df['STD'].iloc[-1]), 'anomalia': cisne_reciente}
+    return df, {'pred': float(pred_ia), 'rec': rec, 'pe': pe_ratio, 'precio': precio_act, 'std': float(df['STD'].iloc[-1])}
 
 hoy_str = datetime.now().strftime('%d/%m/%Y')
-enviar_telegram(f"🦢 *TERMINAL BLACK SWAN V31.0*\nAuditando Anomalías y Zonas Fibonacci | {hoy_str}\n_Radares de volumen institucional activados..._")
+enviar_telegram(f"✨ *TERMINAL ESTRUCTURAL V30.1*\nAuditando con Motor de Retornos y Fibonacci | {hoy_str}\n_Sincronizando Merval Local (ARS)..._")
 
 for region, activos in mercados.items():
-    bandera = region.split()[0]
+    bandera_nombre = region.split()[0] + " " + region.split()[1] # Ej: 🇦🇷 MERVAL
+    moneda = region.split('(')[1].replace(')', '') # Extrae ARS, USD, GBP
+    
+    enviar_telegram(f"📁 *ANALIZANDO: {region}*")
+    
     for ticker in activos:
         try:
             time.sleep(random.uniform(1.5, 3.5)) 
-            res = motor_black_swan(ticker)
+            res = motor_fibonacci_ia(ticker)
             if not res: continue
             df, data = res
             
@@ -138,15 +138,12 @@ for region, activos in mercados.items():
             valor_rsi = float(df['RSI'].iloc[-1])
             rsi_formateado = str(round(valor_rsi, 1))
             
-            # Alerta visual en el mensaje si hay Cisne Negro
-            alerta_cisne = "\n🚨 *ALERTA:* Volumen anómalo detectado (Smart Money)." if data['anomalia'] else ""
-            
-            msj = (f"{bandera} *{ticker}* | `{data['rec']}`\n"
-                   f"💰 Spot: *${p:.2f}* | P/E: `{pe_formateado}`\n"
-                   f"🧠 IA Target Q2: *${data['pred']:.2f}* ({diff:+.2f}% {emoji})\n"
-                   f"📊 RSI: `{rsi_formateado}` | Riesgo: `±{data['std']:.2f}`{alerta_cisne}")
+            msj = (f"{bandera_nombre} *{ticker}* | `{data['rec']}`\n"
+                   f"💰 Spot: *${p:,.2f} {moneda}* | P/E: `{pe_formateado}`\n"
+                   f"🧠 IA Target Q2: *${data['pred']:,.2f} {moneda}* ({diff:+.2f}% {emoji})\n"
+                   f"📊 RSI: `{rsi_formateado}` | Riesgo: `±{data['std']:.2f}`")
 
-            # GRÁFICO CON FIBONACCI Y CISNES NEGROS
+            # GRÁFICO CON FIBONACCI
             plt.style.use('dark_background')
             fig = plt.figure(figsize=(11, 7))
             fig.patch.set_facecolor('#0b0f19')
@@ -160,11 +157,7 @@ for region, activos in mercados.items():
             ax1.fill_between(df_plot.index, df_plot['BB_Lower'], df_plot['BB_Upper'], color='#38bdf8', alpha=0.05)
             ax1.plot(df_plot.index, df_plot['SMA_200'], color='#f472b6', linestyle='--', alpha=0.6, label='SMA 200 (Tendencia)')
             
-            # Dibujar estrellas donde hubo anomalías de volumen
-            if not df_plot['Cisne_Negro'].dropna().empty:
-                ax1.scatter(df_plot.index, df_plot['Cisne_Negro'], color='#d946ef', s=150, marker='*', zorder=5, label='Anomalía Institucional')
-            
-            # --- FIBONACCI ---
+            # --- DIBUJAR FIBONACCI ---
             max_price = df_plot['Close'].max()
             min_price = df_plot['Close'].min()
             diferencia = max_price - min_price
@@ -174,7 +167,6 @@ for region, activos in mercados.items():
             ax1.axhline(fib_618, color='#eab308', linestyle=':', alpha=0.7, label='Fib 61.8% (Soporte Fuerte)')
             ax1.axhline(fib_382, color='#fb923c', linestyle=':', alpha=0.5, label='Fib 38.2%')
             
-            # --- PROYECCIÓN ---
             fecha_futura = df.index[-1] + timedelta(days=60)
             ax1.plot([df.index[-1], fecha_futura], [p, data['pred']], color='#4ade80' if diff > 0 else '#ef4444', linestyle='--', linewidth=2.5, marker='o', markersize=6, label='Ruta IA')
             
@@ -182,12 +174,11 @@ for region, activos in mercados.items():
             color_cono = '#4ade80' if diff > 0 else '#ef4444'
             ax1.fill_between([df.index[-1], fecha_futura], [p, data['pred'] + margen_error], [p, data['pred'] - margen_error], color=color_cono, alpha=0.15)
             
-            ax1.set_title(f"Terminal V31 (Black Swan): {ticker} | Zonas Fibonacci", color='white', loc='left', fontsize=12, fontweight='bold')
+            ax1.set_title(f"Terminal V30.1: {ticker} | Zonas Fibonacci | Moneda: {moneda}", color='white', loc='left', fontsize=12, fontweight='bold')
             ax1.legend(loc='upper left', fontsize='small', framealpha=0.2)
             ax1.grid(color='#1e293b', alpha=0.4, linestyle=':')
             ax1.tick_params(labelbottom=False) 
             
-            # --- PANEL RSI ---
             ax2 = fig.add_subplot(gs[1])
             ax2.set_facecolor('#0b0f19')
             ax2.plot(df_plot.index, df_plot['RSI'], color='#c084fc', linewidth=1.5)
@@ -210,4 +201,4 @@ for region, activos in mercados.items():
             print(f"Fallo en {ticker}: {e}")
             continue
 
-enviar_telegram("✅ *AUDITORÍA BLACK SWAN 2026 FINALIZADA*")
+enviar_telegram("✅ *AUDITORÍA FIBONACCI LOCAL FINALIZADA*")

@@ -5,6 +5,7 @@ from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+import matplotlib.patches as patches
 import requests
 import io
 import warnings
@@ -35,124 +36,115 @@ def enviar_telegram(mensaje, fig=None):
     except Exception as e:
         print(f"Error Telegram: {e}")
 
-# --- UNIVERSO INTRADÍA (Solo Activos de Alta Liquidez) ---
-# Para Day Trading, necesitamos activos que se muevan rápido y tengan mucho volumen.
+# --- UNIVERSO INTRADÍA (Alta Liquidez) ---
 activos_sniper = {
     '🚀 TECH USA': ['AAPL', 'NVDA', 'TSLA', 'AMD', 'META'],
     '🇦🇷 ADRs ARG': ['GGAL', 'YPF', 'PAM', 'BMA'],
-    '🪙 CRIPTO & MACRO': ['BTC-USD', 'SPY', 'QQQ', 'GC=F']
+    '🌍 ÍNDICES': ['SPY', 'QQQ', 'IWM']
 }
 
-def motor_sniper_15m(ticker):
+def motor_sniper_smc(ticker):
     df = pd.DataFrame()
     for intento in range(3):
         try:
             t = yf.Ticker(ticker)
-            # Descargamos velas de 15 minutos de los últimos 5 días
             df = t.history(period="5d", interval="15m", timeout=10)
             if not df.empty and len(df) > 50: break
         except: time.sleep(2)
     
     if df.empty or len(df) < 50: return None
     
-    # --- INDICADORES DE ALTA FRECUENCIA ---
-    # 1. EMAs Rápidas (El Gatillo)
+    # --- INDICADORES BÁSICOS ---
     df['EMA_9'] = df['Close'].ewm(span=9, adjust=False).mean()
     df['EMA_21'] = df['Close'].ewm(span=21, adjust=False).mean()
     
-    # 2. VWAP Intradía (Precio Promedio Ponderado por Volumen)
-    # El VWAP se reinicia cada día al abrir el mercado
     df['Date'] = df.index.date
     df['Typical_Price'] = (df['High'] + df['Low'] + df['Close']) / 3
     df['VWAP'] = (df['Typical_Price'] * df['Volume']).groupby(df['Date']).cumsum() / df['Volume'].groupby(df['Date']).cumsum()
     
-    # 3. ATR (Para calcular Stop Loss y Take Profit milimétricos)
-    df['TR'] = np.maximum(df['High'] - df['Low'], 
-               np.maximum(abs(df['High'] - df['Close'].shift(1)), abs(df['Low'] - df['Close'].shift(1))))
-    df['ATR'] = df['TR'].rolling(14).mean()
+    # --- SMART MONEY CONCEPTS (SMC) ---
+    # 1. Identificar Order Blocks (Últimos 40 periodos)
+    df_reciente = df.iloc[-40:]
+    max_idx = df_reciente['High'].idxmax()
+    min_idx = df_reciente['Low'].idxmin()
     
-    # 4. RSI Rápido (Periodo 9 en lugar de 14 para day trading)
-    delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(9).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(9).mean()
-    df['RSI'] = 100 - (100 / (1 + (gain/loss)))
+    # Supply Zone (Bloque de Órdenes Bajista)
+    supply_top = df_reciente.loc[max_idx, 'High']
+    supply_bot = min(df_reciente.loc[max_idx, 'Open'], df_reciente.loc[max_idx, 'Close'])
     
-    # --- IA PROYECTIVA CORTA (Próximas 8 velas = 2 Horas) ---
-    velas_proy = 8 
-    df['Target_Ret'] = (df['Close'].shift(-velas_proy) / df['Close']) - 1.0
-    train = df.dropna(subset=['Close', 'EMA_9', 'EMA_21', 'RSI', 'Target_Ret'])
+    # Demand Zone (Bloque de Órdenes Alcista)
+    demand_bot = df_reciente.loc[min_idx, 'Low']
+    demand_top = max(df_reciente.loc[min_idx, 'Open'], df_reciente.loc[min_idx, 'Close'])
     
-    features = ['Close', 'EMA_9', 'EMA_21', 'RSI']
-    scaler = StandardScaler()
+    # 2. Identificar Imbalances / FVG (Fair Value Gaps) en las últimas 15 velas
+    fvg_bullish = None
+    fvg_bearish = None
     
-    if len(train) > 20:
-        X_train = scaler.fit_transform(train[features].iloc[:-velas_proy])
-        y_train = train['Target_Ret'].iloc[:-velas_proy]
-        
-        model = Ridge(alpha=0.1) # Alta sensibilidad
-        model.fit(X_train, y_train)
-        
-        X_ultima = scaler.transform(df[features].iloc[-1:])
-        pred_retorno = model.predict(X_ultima)[0]
-    else:
-        pred_retorno = 0.0
-        
+    for i in range(len(df)-15, len(df)-2):
+        # Bullish FVG (Hueco alcista)
+        if df['Low'].iloc[i+2] > df['High'].iloc[i]:
+            fvg_bullish = (df['High'].iloc[i], df['Low'].iloc[i+2])
+        # Bearish FVG (Hueco bajista)
+        if df['High'].iloc[i+2] < df['Low'].iloc[i]:
+            fvg_bearish = (df['Low'].iloc[i], df['High'].iloc[i+2])
+
     precio_act = float(df['Close'].iloc[-1])
-    pred_ia_cruda = precio_act * (1 + pred_retorno)
+    vwap_act = float(df['VWAP'].iloc[-1])
     
-    # Determinar Tendencia Inmediata
-    ema9_act = df['EMA_9'].iloc[-1]
-    ema21_act = df['EMA_21'].iloc[-1]
-    vwap_act = df['VWAP'].iloc[-1]
-    atr_act = df['ATR'].iloc[-1]
+    # Lógica de Trading SMC
+    estado = "ESPERANDO ZONA ⚪"
+    accion = "OBSERVAR 👀"
     
-    estado_tendencia = "NEUTRAL ⚪"
-    accion = "ESPERAR ⏳"
-    
-    if ema9_act > ema21_act and precio_act > vwap_act:
-        estado_tendencia = "ALCISTA 🟢"
+    # Si el precio toca la zona de demanda (bancos comprando)
+    if demand_bot <= precio_act <= (demand_top * 1.005):
+        estado = "EN ZONA DE DEMANDA (ORDER BLOCK) 🟢"
         accion = "LONG (COMPRAR) 🚀"
-        stop_loss = precio_act - (atr_act * 1.5) # Stop ajustado
-        take_profit = precio_act + (atr_act * 3.0) # TP al doble de riesgo
-    elif ema9_act < ema21_act and precio_act < vwap_act:
-        estado_tendencia = "BAJISTA 🔴"
+        stop_loss = demand_bot * 0.995
+        take_profit = supply_bot
+    # Si el precio toca la zona de oferta (bancos vendiendo)
+    elif (supply_bot * 0.995) <= precio_act <= supply_top:
+        estado = "EN ZONA DE OFERTA (ORDER BLOCK) 🔴"
         accion = "SHORT (VENDER) 🩸"
-        stop_loss = precio_act + (atr_act * 1.5)
-        take_profit = precio_act - (atr_act * 3.0)
+        stop_loss = supply_top * 1.005
+        take_profit = demand_top
     else:
-        # En consolidación
-        stop_loss = precio_act - (atr_act * 1.5)
-        take_profit = precio_act + (atr_act * 1.5)
+        # Neutro
+        stop_loss = precio_act * 0.99
+        take_profit = precio_act * 1.01
 
     return df, {
-        'precio': precio_act, 'pred': float(pred_ia_cruda), 
-        'vwap': vwap_act, 'accion': accion, 'estado': estado_tendencia,
-        'sl': float(stop_loss), 'tp': float(take_profit), 'rsi': float(df['RSI'].iloc[-1])
+        'precio': precio_act, 'vwap': vwap_act, 'accion': accion, 'estado': estado,
+        'sl': stop_loss, 'tp': take_profit, 
+        'supply': (supply_bot, supply_top), 'demand': (demand_bot, demand_top),
+        'fvg_bull': fvg_bullish, 'fvg_bear': fvg_bearish
     }
 
 hoy_str = datetime.now().strftime('%d/%m/%Y %H:%M')
-enviar_telegram(f"⚡ *SNIPER INTRADÍA V1.0*\nActivando radares de 15 minutos | {hoy_str}\n_Buscando liquidez institucional..._")
+enviar_telegram(f"🧠 *SNIPER SMC V2.0*\nBuscando Liquidez Institucional (15m) | {hoy_str}\n_Rastreando Order Blocks y Fair Value Gaps..._")
 
 for sector, activos in activos_sniper.items():
     for ticker in activos:
         try:
-            time.sleep(random.uniform(1.0, 2.5)) 
-            res = motor_sniper_15m(ticker)
+            time.sleep(random.uniform(1.0, 2.0)) 
+            res = motor_sniper_smc(ticker)
             if not res: continue
             df, data = res
             
-            p = data['precio']
-            rsi_formateado = f"{data['rsi']:.1f}"
+            # Solo alertar si hay acción real (para no saturar Telegram de "Observar")
+            if data['accion'] == "OBSERVAR 👀":
+                continue
             
-            msj = (f"🎯 *{ticker}* | 15 MINUTOS\n"
-                   f"💰 Spot: *${p:.2f}* | VWAP: `${data['vwap']:.2f}`\n"
-                   f"🚦 Señal: *{data['accion']}*\n\n"
-                   f"🛡️ *PLAN DE TRADING:*\n"
-                   f"• Take Profit: `${data['tp']:.2f}`\n"
-                   f"• Stop Loss: `${data['sl']:.2f}`\n\n"
-                   f"🧠 IA 2 Horas: `${data['pred']:.2f}` | RSI: `{rsi_formateado}`")
+            p = data['precio']
+            
+            msj = (f"🎯 *{ticker}* | SETUP INSTITUCIONAL (15m)\n"
+                   f"🚦 Señal: *{data['accion']}*\n"
+                   f"🏦 Estado: `{data['estado']}`\n\n"
+                   f"💰 Spot: *${p:.2f}* | VWAP: `${data['vwap']:.2f}`\n\n"
+                   f"🛡️ *PARÁMETROS SMC:*\n"
+                   f"• Target Liquidez (TP): `${data['tp']:.2f}`\n"
+                   f"• Invalidación (SL): `${data['sl']:.2f}`")
 
-            # --- GRÁFICO INTRADÍA TIPO SCALPING ---
+            # --- GRÁFICO SMC ---
             plt.style.use('dark_background')
             fig = plt.figure(figsize=(11, 7))
             fig.patch.set_facecolor('#0b0f19')
@@ -161,33 +153,34 @@ for sector, activos in activos_sniper.items():
             ax1 = fig.add_subplot(gs[0])
             ax1.set_facecolor('#0b0f19')
             
-            # Mostrar solo las últimas 60 velas (unas 15 horas de mercado)
             df_plot = df.iloc[-60:] 
             
-            # Línea de precio
+            # Líneas base
             ax1.plot(df_plot.index, df_plot['Close'], color='#e2e8f0', linewidth=2, label='Precio')
+            ax1.plot(df_plot.index, df_plot['VWAP'], color='#eab308', linestyle='-.', linewidth=1.5, alpha=0.8, label='VWAP')
             
-            # VWAP (Línea Institucional)
-            ax1.plot(df_plot.index, df_plot['VWAP'], color='#eab308', linestyle='-.', linewidth=2, alpha=0.8, label='VWAP (Institucional)')
+            # DIBUJAR ORDER BLOCKS (Cajas Transparentes)
+            sup_bot, sup_top = data['supply']
+            dem_bot, dem_top = data['demand']
             
-            # EMAs rápidas
-            ax1.plot(df_plot.index, df_plot['EMA_9'], color='#4ade80', linewidth=1.2, alpha=0.9, label='EMA 9 (Rápida)')
-            ax1.plot(df_plot.index, df_plot['EMA_21'], color='#f43f5e', linewidth=1.2, alpha=0.9, label='EMA 21 (Lenta)')
+            ax1.axhspan(sup_bot, sup_top, color='#ef4444', alpha=0.2, label='Supply (Order Block Bajista)')
+            ax1.axhspan(dem_bot, dem_top, color='#22c55e', alpha=0.2, label='Demand (Order Block Alcista)')
             
-            # Zonas de Stop y Profit (Líneas horizontales en la última vela)
-            ax1.axhline(data['tp'], color='#4ade80', linestyle=':', alpha=0.8, label='Take Profit')
-            ax1.axhline(data['sl'], color='#ef4444', linestyle=':', alpha=0.8, label='Stop Loss')
+            # DIBUJAR IMBALANCES (FVG)
+            if data['fvg_bull']:
+                ax1.axhspan(data['fvg_bull'][0], data['fvg_bull'][1], color='#3b82f6', alpha=0.15, hatch='//', label='FVG Alcista (Imán)')
+            if data['fvg_bear']:
+                ax1.axhspan(data['fvg_bear'][0], data['fvg_bear'][1], color='#f97316', alpha=0.15, hatch='\\\\', label='FVG Bajista (Imán)')
             
-            ax1.set_title(f"Sniper Intradía: {ticker} | {data['estado']}", color='white', loc='left', fontsize=12, fontweight='bold')
+            ax1.set_title(f"SMC Sniper: {ticker} | Zonas de Alta Probabilidad", color='white', loc='left', fontsize=12, fontweight='bold')
             ax1.legend(loc='upper left', fontsize='x-small', framealpha=0.2)
             ax1.grid(color='#1e293b', alpha=0.4, linestyle=':')
             ax1.tick_params(labelbottom=False) 
             
-            # Panel de Volumen (Para el scalping el volumen es más importante que el RSI solo)
+            # Panel Volumen
             ax2 = fig.add_subplot(gs[1])
             ax2.set_facecolor('#0b0f19')
             
-            # Colores de volumen (verde si cerró al alza, rojo a la baja)
             colores_vol = ['#4ade80' if c >= o else '#ef4444' for c, o in zip(df_plot['Close'], df_plot['Open'])]
             ax2.bar(df_plot.index, df_plot['Volume'], color=colores_vol, alpha=0.6, width=0.01)
             
@@ -202,7 +195,6 @@ for sector, activos in activos_sniper.items():
             enviar_telegram(msj, fig)
             
         except Exception as e:
-            print(f"Fallo en {ticker}: {e}")
             continue
 
-enviar_telegram("🛑 *RADAR INTRADÍA FINALIZADO*")
+enviar_telegram("🛑 *RADAR SMC FINALIZADO*")

@@ -45,75 +45,87 @@ def cazar_dividendos():
     
     for ticker in tickers_dividendos:
         try:
-            time.sleep(2) # Aumentamos la pausa para evitar bloqueos
+            time.sleep(1.5) # Pausa anti-bloqueo
             t = yf.Ticker(ticker)
-            info = t.info
             
-            # Intentamos extraer el yield de diferentes formas por si Yahoo cambia el formato
-            yield_crudo = info.get('dividendYield') or info.get('trailingAnnualDividendYield')
-            tasa_anual_usd = info.get('dividendRate') or info.get('trailingAnnualDividendRate')
-            precio_actual = info.get('currentPrice') or info.get('previousClose')
-            ex_div_timestamp = info.get('exDividendDate')
+            # 1. Usar fast_info (nunca falla ni se bloquea)
+            precio_actual = t.fast_info.get('lastPrice')
+            if not precio_actual:
+                continue
+                
+            # 2. Descargar pagos reales del último año
+            divs = t.dividends
+            if divs.empty:
+                continue
+                
+            un_ano_atras = pd.Timestamp.now(tz=divs.index.tz) - pd.DateOffset(years=1)
+            divs_ultimo_ano = divs[divs.index >= un_ano_atras]
             
-            if yield_crudo and tasa_anual_usd and precio_actual:
-                yield_real = float(yield_crudo) * 100
+            pago_anual_usd = divs_ultimo_ano.sum()
+            if pago_anual_usd <= 0:
+                continue
                 
-                # Filtro Anti-Bugs
-                if yield_real > 15.0 or (ticker in ['MSFT', 'AAPL'] and yield_real > 3.0):
-                    continue 
-                
-                pago_trimestral_estimado = float(tasa_anual_usd) / 4
-                
-                lista_general.append({
-                    'ticker': ticker,
-                    'yield': yield_real,
-                    'pago_usd_aprox': pago_trimestral_estimado,
-                    'precio': float(precio_actual)
-                })
-                
+            # 3. Matemática propia del bot
+            yield_real = (pago_anual_usd / precio_actual) * 100
+            pago_trimestral_estimado = pago_anual_usd / 4
+            
+            # Filtro Anti-Bugs
+            if yield_real > 15.0 or (ticker in ['MSFT', 'AAPL'] and yield_real > 3.0):
+                continue 
+            
+            lista_general.append({
+                'ticker': ticker,
+                'yield': yield_real,
+                'pago_usd_aprox': pago_trimestral_estimado,
+                'precio': float(precio_actual)
+            })
+            
+            # 4. Intentar ver si hay un pago inminente en la API normal
+            try:
+                info = t.info
+                ex_div_timestamp = info.get('exDividendDate')
                 if ex_div_timestamp:
-                    try:
-                        fecha_ex_div = datetime.fromtimestamp(ex_div_timestamp)
-                        if hoy <= fecha_ex_div <= limite_dias:
-                            oportunidades.append({
-                                'ticker': ticker,
-                                'yield': yield_real,
-                                'pago_usd_aprox': pago_trimestral_estimado,
-                                'fecha_limite': fecha_ex_div,
-                                'precio': float(precio_actual)
-                            })
-                    except:
-                        pass # Ignorar si la fecha no se puede convertir
+                    fecha_ex_div = datetime.fromtimestamp(ex_div_timestamp)
+                    if hoy <= fecha_ex_div <= limite_dias:
+                        oportunidades.append({
+                            'ticker': ticker,
+                            'yield': yield_real,
+                            'pago_usd_aprox': pago_trimestral_estimado,
+                            'fecha_limite': fecha_ex_div,
+                            'precio': float(precio_actual)
+                        })
+            except:
+                pass # Si Yahoo bloquea el .info, igual tenemos la lista general
+                
         except Exception as e:
-            print(f"Error con {ticker}: {e}")
             continue
             
     return oportunidades, lista_general
 
 hoy_str = datetime.now().strftime('%d/%m/%Y')
-enviar_telegram(f"💸 *CAZADOR DE RENTA PASIVA V32.2* | {hoy_str}\n_Extracción de datos reforzada..._")
+enviar_telegram(f"💸 *CAZADOR DE RENTA PASIVA V32.3* | {hoy_str}\n_Motor Anti-Bloqueos (Cálculo Manual) Activado..._")
 
 oportunidades, lista_general = cazar_dividendos()
 
 if not oportunidades:
-    # --- RADAR DE GUARDIA (FALLBACK) ---
     if lista_general:
         lista_general.sort(key=lambda x: x['yield'], reverse=True)
         top_3 = lista_general[:3]
         
         msj_fallback = ("✅ *SIN PAGOS INMINENTES (30 DÍAS)*\n"
                         "Ninguna empresa corta cupón pronto.\n\n"
-                        "👀 *RADAR DE GUARDIA (Top 3):*\n")
+                        "👀 *RADAR DE GUARDIA (Top 3 Reales):*\n"
+                        "_Calculado en base a los pagos de los últimos 12 meses:_\n\n")
         
         for emp in top_3:
             msj_fallback += (f"👑 *{emp['ticker']}*\n"
-                             f"• Yield Anual: `{emp['yield']:.2f}%`\n"
+                             f"• Yield Anual Real: `{emp['yield']:.2f}%`\n"
                              f"• Spot Actual: `${emp['precio']:.2f}`\n"
-                             f"• Pago Estimado (1 acción): `+${emp['pago_usd_aprox']:.2f} USD` trimestral\n\n")
+                             f"• Estimado (1 acción): `+${emp['pago_usd_aprox']:.2f} USD` trimestral\n\n")
         
         enviar_telegram(msj_fallback)
     else:
-        enviar_telegram("⚠️ *ERROR DE CONEXIÓN A YAHOO*\nNo se pudieron extraer datos de dividendos en este momento.")
+        enviar_telegram("⚠️ *ERROR SEVERO DE CONEXIÓN*\nYahoo Finance ha bloqueado todas las rutas de acceso. Reintentar más tarde.")
 
 else:
     oportunidades.sort(key=lambda x: x['pago_usd_aprox'], reverse=True)
@@ -143,7 +155,7 @@ else:
         ax.axis('off')
         
         ax.text(0.05, 0.80, f"CUPÓN DE PAGO: {tck}", color='#eab308', fontsize=18, fontweight='bold', ha='left') 
-        ax.text(0.05, 0.55, f"Yield Anual: {yield_pct:.2f}%", color='#4ade80', fontsize=14, fontweight='bold', ha='left')
+        ax.text(0.05, 0.55, f"Yield Anual Real: {yield_pct:.2f}%", color='#4ade80', fontsize=14, fontweight='bold', ha='left')
         ax.text(0.05, 0.35, f"Comprar antes del: {fecha_txt} (En {dias_faltantes} días)", color='white', fontsize=12, ha='left')
         ax.text(0.05, 0.10, f"Estimado por 1 acción: +${pago_usd:.2f} USD", color='#22d3ee', fontsize=13, fontweight='bold', ha='left')
         

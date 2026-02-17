@@ -90,14 +90,15 @@ def motor_institucional(ticker):
     try:
         info = t.info
         rec = str(info.get('recommendationKey', 'HOLD')).upper()
-        pe = info.get('forwardPE', 'N/A')
+        pe_ratio = info.get('forwardPE', 'N/A')
     except:
-        rec, pe = "N/A", "N/A"
+        rec = "N/A"
+        pe_ratio = "N/A"
 
-    return df, {'pred': float(pred_ia), 'rec': rec, 'pe': pe, 'precio': precio_act, 'std': float(df['STD'].iloc[-1])}
+    return df, {'pred': float(pred_ia), 'rec': rec, 'pe': pe_ratio, 'precio': precio_act, 'std': float(df['STD'].iloc[-1])}
 
 hoy_str = datetime.now().strftime('%d/%m/%Y')
-enviar_telegram(f"🏛️ *TERMINAL INSTITUCIONAL V27.2*\nIniciando Escaneo Avanzado | {hoy_str}\n_Compatibilidad con Python 3.10 asegurada..._")
+enviar_telegram(f"🏛️ *TERMINAL INSTITUCIONAL V27.3*\nIniciando Escaneo Avanzado | {hoy_str}\n_Anti-Crash Python 3.10 Activado..._")
 
 for region, activos in mercados.items():
     bandera = region.split()[0]
@@ -112,18 +113,24 @@ for region, activos in mercados.items():
             diff = ((data['pred'] / p) - 1) * 100
             emoji = "🟢" if diff > 0 else "🔴"
             
-            # --- SOLUCIÓN DEL ERROR AQUÍ ---
-            # Separamos el formateo para que Python 3.10 no se rompa
-            pe_val = data['pe']
-            if isinstance(pe_val, str):
-                pe_str = pe_val
+            # --- CÁLCULO SEGURO SIN F-STRINGS COMPLEJOS ---
+            valor_pe = data['pe']
+            pe_formateado = "N/A"
+            if isinstance(valor_pe, (int, float)):
+                pe_formateado = str(round(valor_pe, 1))
             else:
-                pe_str = f"{pe_val:.1f}"
+                pe_formateado = str(valor_pe)
+                
+            valor_rsi = float(df['RSI'].iloc[-1])
+            rsi_formateado = str(round(valor_rsi, 1))
+            
+            valor_macd = float(df['MACD'].iloc[-1])
+            macd_formateado = str(round(valor_macd, 2))
             
             msj = (f"{bandera} *{ticker}* | `{data['rec']}`\n"
-                   f"💰 Spot: *${p:.2f}* | P/E: `{pe_str}`\n"
+                   f"💰 Spot: *${p:.2f}* | P/E: `{pe_formateado}`\n"
                    f"🧠 IA Target Q2: *${data['pred']:.2f}* ({diff:+.2f}% {emoji})\n"
-                   f"📊 RSI: `{float(df['RSI'].iloc[-1]):.1f}` | MACD: `{float(df['MACD'].iloc[-1]):.2f}`")
+                   f"📊 RSI: `{rsi_formateado}` | MACD: `{macd_formateado}`")
 
             # GRÁFICO INSTITUCIONAL
             plt.style.use('dark_background')

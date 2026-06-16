@@ -1,0 +1,9 @@
+yfinance==0.2.36
+pandas
+scikit-learn
+matplotlib
+requests
+lxml
+python-telegram-bot==20.8
+python-dotenv
+
